@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+  <title>PiMusic</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Full-screen blurred background layer -->
+  <div id="bg-layer" class="bg-layer"></div>
+  <div id="bg-overlay" class="bg-overlay"></div>
+
+  <!-- Canvas video lives outside .player so it can fill the viewport independently -->
+  <video id="canvas-video" class="canvas-video" autoplay loop muted playsinline></video>
+  <div class="retro-overlay"></div>
+
+  <main class="player">
+    <!-- Connection / device badge -->
+    <div class="topbar">
+      <span id="device-badge" class="device-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3Zm7 11a7 7 0 0 1-14 0H3a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12Z"/></svg>
+        <span id="device-name">Connecting…</span>
+      </span>
+    </div>
+
+    <!-- Album art -->
+    <div class="artwork-wrap" id="artwork-wrap">
+      <img id="album-art" class="album-art" src="" alt="Album Art">
+    </div>
+
+    <!-- Track info -->
+    <div class="track-info">
+      <div id="track-title" class="track-title">—</div>
+      <div id="track-artist" class="track-artist">—</div>
+    </div>
+
+    <!-- Progress bar -->
+    <div class="progress-wrap">
+      <span id="time-current" class="time">0:00</span>
+      <div id="progress-bar" class="progress-bar">
+        <div id="progress-fill" class="progress-fill"></div>
+        <div id="progress-thumb" class="progress-thumb"></div>
+      </div>
+      <span id="time-total" class="time">0:00</span>
+    </div>
+
+    <!-- Playback controls -->
+    <div class="controls">
+      <button id="btn-prev" class="ctrl-btn" aria-label="Previous">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+      </button>
+      <button id="btn-play" class="ctrl-btn ctrl-btn--play" aria-label="Play/Pause">
+        <svg id="icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <svg id="icon-pause" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
+      </button>
+      <button id="btn-next" class="ctrl-btn" aria-label="Next">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm10-12v12h2V6z"/></svg>
+      </button>
+    </div>
+
+    <!-- Volume -->
+    <div class="volume-wrap">
+      <svg class="vol-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.5v7a4.49 4.49 0 0 0 2.5-3.5zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg>
+      <input id="volume-slider" type="range" min="0" max="100" value="50" class="volume-slider">
+    </div>
+  </main>
+
+  <script src="/static/app.js?v=14"></script>
+</body>
+</html>

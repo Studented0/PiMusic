@@ -1,0 +1,455 @@
+/* ── Reset & base ─────────────────────────────────────── */
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root {
+  --bg: #0a0a0f;
+  --accent: #1db954;
+  --text: #ffffff;
+  --text-dim: rgba(255,255,255,.55);
+  --radius: 16px;
+  --transition: .45s cubic-bezier(.4,0,.2,1);
+}
+
+html,body {
+  width: 100%; height: 100%;
+  overflow: hidden;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+}
+
+.hidden { display: none !important; }
+
+/* ── Blurred background ──────────────────────────────── */
+.bg-layer {
+  position: fixed; inset: 0;
+  background-size: cover;
+  background-position: center;
+  filter: blur(80px) saturate(1.6) brightness(.55);
+  transform: scale(1.3);
+  z-index: 0;
+}
+.bg-overlay {
+  position: fixed; inset: 0;
+  background: radial-gradient(ellipse at 50% 30%, transparent 0%, rgba(0,0,0,.65) 100%);
+  z-index: 1;
+}
+
+/* ── Player container ────────────────────────────────── */
+.player {
+  position: relative; z-index: 2;
+  width: 100%; height: 100%;
+  max-width: 800px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 28px;
+  gap: 14px;
+}
+
+/* ── Top bar / device badge ──────────────────────────── */
+.topbar {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  padding-bottom: 4px;
+}
+.device-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(29,185,84,.12);
+  padding: 5px 14px;
+  border-radius: 20px;
+  letter-spacing: .4px;
+  transition: opacity var(--transition);
+}
+
+/* ── Album art ───────────────────────────────────────── */
+.artwork-wrap {
+  position: relative;
+  width: min(62vw, 340px);
+  aspect-ratio: 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0,0,0,.5);
+  flex-shrink: 0;
+  transition: box-shadow var(--transition);
+}
+.album-art {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transition: opacity .6s ease;
+}
+/* Default (Old View): video positioned over artwork box via JS */
+.canvas-video {
+  position: absolute;
+  top: 0; left: 0;
+  width: 0; height: 0;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 2s ease;
+  z-index: 3;
+  pointer-events: none;
+  border-radius: var(--radius);
+  background: #000;
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  filter: contrast(1.2) saturate(1.3) brightness(1.1);
+  -webkit-filter: contrast(1.2) saturate(1.3) brightness(1.1);
+}
+.canvas-video.active { opacity: 1; }
+.bg-canvas-active { background-image: none !important; }
+
+.artwork-wrap { cursor: pointer; }
+
+/* Retro scanline overlay – hidden by default, shown in cinematic */
+.retro-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+  opacity: 0.3;
+  mix-blend-mode: overlay;
+  background:
+    linear-gradient(rgba(18,16,16,0) 50%, rgba(0,0,0,0.25) 50%),
+    linear-gradient(90deg, rgba(255,0,0,0.06), rgba(0,255,0,0.02), rgba(0,0,255,0.06));
+  background-size: 100% 4px, 3px 100%;
+}
+.canvas-cinematic .retro-overlay { display: block; }
+
+
+/* ── Track info ──────────────────────────────────────── */
+.track-info {
+  width: 100%;
+  text-align: center;
+  padding: 4px 0;
+  min-height: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  transition: opacity .3s ease;
+}
+.track-info.stale {
+  opacity: .45;
+}
+.track-title {
+  font-size: clamp(18px, 4.5vw, 26px);
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  transition: color var(--transition);
+}
+.track-artist {
+  font-size: clamp(13px, 3vw, 16px);
+  color: var(--text-dim);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ── Progress bar (GPU-accelerated via scaleX) ────────── */
+.progress-wrap {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+}
+.time {
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 36px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.progress-bar {
+  flex: 1;
+  height: 4px;
+  background: rgba(255,255,255,.15);
+  border-radius: 4px;
+  position: relative;
+  cursor: pointer;
+  touch-action: none;
+}
+.progress-bar::before {
+  content: "";
+  position: absolute;
+  top: -12px; bottom: -12px;
+  left: 0; right: 0;
+}
+.progress-bar:hover { height: 6px; }
+
+.progress-fill {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transform: scaleX(0);
+  transform-origin: left center;
+  will-change: transform;
+}
+
+.progress-thumb {
+  position: absolute;
+  top: 50%;
+  left: 0%;
+  width: 12px; height: 12px;
+  background: #fff;
+  border-radius: 50%;
+  transform: translate(-50%,-50%) scale(1);
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  transition: transform .15s ease;
+  will-change: left;
+  touch-action: none;
+}
+.progress-bar:hover .progress-thumb,
+.progress-bar:active .progress-thumb {
+  transform: translate(-50%,-50%) scale(1.2);
+}
+
+/* ── Controls ────────────────────────────────────────── */
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+}
+.ctrl-btn {
+  background: none;
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 12px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform .18s ease, background .18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+.ctrl-btn svg { width: 28px; height: 28px; }
+.ctrl-btn:active { transform: scale(.88); }
+.ctrl-btn:hover { background: rgba(255,255,255,.08); }
+
+.ctrl-btn--play {
+  background: var(--text);
+  color: #000;
+  width: 64px; height: 64px;
+  border-radius: 50%;
+}
+.ctrl-btn--play svg { width: 32px; height: 32px; }
+.ctrl-btn--play:hover {
+  transform: scale(1.06);
+  background: #fff;
+}
+.ctrl-btn--play:active { transform: scale(.94); }
+
+/* ── Volume ──────────────────────────────────────────── */
+.volume-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 60%;
+  max-width: 280px;
+}
+.vol-icon { width: 20px; height: 20px; color: var(--text-dim); flex-shrink: 0; }
+
+.volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 5px;
+  background: rgba(255,255,255,.15);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px; height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  cursor: pointer;
+}
+.volume-slider::-moz-range-thumb {
+  width: 16px; height: 16px;
+  background: #fff;
+  border-radius: 50%;
+  border: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4);
+  cursor: pointer;
+}
+
+/* ── Idle state ──────────────────────────────────────── */
+.player.idle .artwork-wrap { opacity: .3; }
+.player.idle .track-title { color: var(--text-dim); }
+
+/* ── Animations ──────────────────────────────────────── */
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+.connecting .device-badge { animation: pulse 1.5s infinite; }
+
+@keyframes art-in {
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: scale(1);   }
+}
+.album-art.fresh { animation: art-in .6s ease forwards; }
+
+/* ── 800x480 kiosk optimisation ──────────────────────── */
+@media (max-width: 840px) and (max-height: 520px) {
+  .player {
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    padding: 12px 18px;
+    gap: 10px;
+  }
+  .topbar { order: -1; width: 100%; padding-bottom: 0; }
+  .artwork-wrap {
+    width: 180px;
+    flex-shrink: 0;
+  }
+  .track-info,
+  .progress-wrap,
+  .controls,
+  .volume-wrap {
+    width: calc(100% - 200px);
+    max-width: none;
+  }
+  .track-info { text-align: left; min-height: auto; }
+  .track-title { font-size: 20px; }
+  .track-artist { font-size: 13px; }
+  .controls { gap: 18px; justify-content: center; }
+  .ctrl-btn--play { width: 52px; height: 52px; }
+  .volume-wrap { width: calc(100% - 200px); }
+}
+
+/* ── Cinematic mode (iOS lock-screen style) ────────── */
+
+/* Video fills the entire viewport – full-frame, no borders */
+.canvas-cinematic .canvas-video {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  object-fit: cover;
+  z-index: 5;
+  border-radius: 0;
+  pointer-events: auto;
+  cursor: pointer;
+  background: #000;
+  image-rendering: -webkit-optimize-contrast;
+  transform: translateZ(0);
+  -webkit-transform: translateZ(0);
+  filter: contrast(1.2) saturate(1.3) brightness(1.1);
+  -webkit-filter: contrast(1.2) saturate(1.3) brightness(1.1);
+}
+
+/* Hide the blurred bg layers – the video IS the background */
+.canvas-cinematic .bg-layer,
+.canvas-cinematic .bg-overlay { opacity: 0; pointer-events: none; }
+
+/* Scrim gradient at the bottom for text legibility */
+.canvas-cinematic::after {
+  content: "";
+  position: fixed;
+  bottom: 0; left: 0;
+  width: 100%; height: 55%;
+  background: linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.4) 50%, transparent 100%);
+  z-index: 6;
+  pointer-events: none;
+}
+
+/* Player becomes a bottom-anchored overlay */
+.canvas-cinematic .player {
+  position: fixed;
+  z-index: 10;
+  bottom: 0; left: 0;
+  width: 100%; height: auto;
+  max-width: none;
+  padding: 0 36px 32px;
+  justify-content: flex-end;
+  background: none;
+}
+
+.canvas-cinematic .topbar { display: none; }
+
+/* Hide album art box in cinematic */
+.canvas-cinematic .artwork-wrap {
+  width: 0; height: 0;
+  min-height: 0;
+  overflow: hidden;
+  opacity: 0;
+  position: absolute;
+  pointer-events: none;
+}
+
+/* Track info: left-aligned, bigger, shadowed */
+.canvas-cinematic .track-info {
+  text-align: left;
+  padding: 0 0 6px;
+}
+.canvas-cinematic .track-title {
+  font-size: clamp(22px, 5.5vw, 34px);
+  text-shadow: 0 0 15px #000, 0 2px 10px rgba(0,0,0,.9);
+}
+.canvas-cinematic .track-artist {
+  font-size: clamp(14px, 3.5vw, 20px);
+  color: rgba(255,255,255,.8);
+  text-shadow: 0 0 15px #000, 0 1px 8px rgba(0,0,0,.9);
+}
+
+/* Progress bar */
+.canvas-cinematic .progress-wrap { padding: 2px 0 10px; }
+.canvas-cinematic .time {
+  text-shadow: 0 0 15px #000, 0 1px 6px rgba(0,0,0,.9);
+}
+.canvas-cinematic .progress-bar {
+  background: rgba(255,255,255,.25);
+  height: 5px;
+}
+.canvas-cinematic .progress-fill {
+  box-shadow: 0 0 8px var(--accent);
+}
+.canvas-cinematic .progress-thumb {
+  width: 14px; height: 14px;
+  box-shadow: 0 0 10px rgba(0,0,0,.6);
+}
+
+/* Controls */
+.canvas-cinematic .controls { gap: 32px; }
+.canvas-cinematic .ctrl-btn {
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,.7));
+}
+.canvas-cinematic .ctrl-btn--play {
+  box-shadow: 0 4px 20px rgba(0,0,0,.5);
+}
+
+/* Volume */
+.canvas-cinematic .volume-wrap { max-width: 220px; }
+.canvas-cinematic .vol-icon {
+  filter: drop-shadow(0 1px 3px rgba(0,0,0,.6));
+}
+
+/* ── Touch-friendly sizing ───────────────────────────── */
+@media (pointer: coarse) {
+  .ctrl-btn { padding: 16px; }
+  .ctrl-btn svg { width: 32px; height: 32px; }
+  .ctrl-btn--play { width: 72px; height: 72px; }
+  .ctrl-btn--play svg { width: 36px; height: 36px; }
+  .volume-slider { height: 8px; }
+  .volume-slider::-webkit-slider-thumb { width: 22px; height: 22px; }
+  .progress-bar { height: 8px; }
+}
