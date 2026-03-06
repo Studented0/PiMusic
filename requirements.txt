@@ -1,0 +1,7 @@
+flask>=3.0
+spotipy>=2.23
+requests>=2.31
+colorthief>=0.2.1
+curl_cffi>=0.14
+playwright>=1.58
+python-dotenv>=1.0
