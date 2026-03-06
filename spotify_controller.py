@@ -32,9 +32,14 @@ _sp_ref = None
 
 _last_play_cmd = 0.0
 _last_pause_cmd = 0.0
+_last_skip_cmd = 0.0
 _CMD_COOLDOWN = 1.0
+_SKIP_COOLDOWN = 0.15
 
 POLL_INTERVAL = 1
+_poll_counter = 0
+_force_poll_timer = None
+_force_poll_timer_lock = threading.Lock()
 
 CANVAS_HASH = "575138ab27cd5c1b3e54da54d0a7cc8d85485402de26340c2145f0f6bb5e7a9f"
 PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v2/query"
@@ -53,6 +58,9 @@ def _fetch_canvas_graphql(track_id):
         with _canvas_lock:
             if track_id in _canvas_cache:
                 _apply_canvas(track_id)
+                return
+        with _lock:
+            if _previous_track_id != track_id:
                 return
 
         cdn_url = None
@@ -75,10 +83,9 @@ def _fetch_canvas_graphql(track_id):
             }, impersonate="chrome131", timeout=10)
 
             if resp.status_code == 200:
-                data = resp.json()
-                canvas = (data.get("data", {})
-                          .get("trackUnion", {})
-                          .get("canvas", {}))
+                data = resp.json() or {}
+                track_union = (data.get("data") or {}).get("trackUnion") or {}
+                canvas = track_union.get("canvas") or {}
                 cdn_url = canvas.get("url", "") or None
                 if cdn_url:
                     print("Canvas found for " + track_id + ": " + cdn_url[:60] + "...")
@@ -92,6 +99,9 @@ def _fetch_canvas_graphql(track_id):
         except Exception as e:
             print("Canvas error for " + track_id + ": " + str(e))
 
+        with _lock:
+            if _current_data.get("track_id") != track_id:
+                return
         with _canvas_lock:
             _canvas_cache[track_id] = cdn_url
         _apply_canvas(track_id)
@@ -142,12 +152,26 @@ def _grab_device(sp):
 
 
 def force_poll():
-    if _sp_ref:
-        threading.Thread(target=_do_poll, args=(_sp_ref,), daemon=True).start()
+    """Schedule a single debounced poll. Rapid skips reset the timer."""
+    global _force_poll_timer
+    if not _sp_ref:
+        return
+    with _force_poll_timer_lock:
+        if _force_poll_timer:
+            _force_poll_timer.cancel()
+        def _run():
+            global _force_poll_timer
+            with _force_poll_timer_lock:
+                _force_poll_timer = None
+            threading.Thread(target=_do_poll, args=(_sp_ref,), daemon=True).start()
+        _force_poll_timer = threading.Timer(0.25, _run)
+        _force_poll_timer.start()
 
 
 def _do_poll(sp):
-    global _previous_track_id, _active_device_id
+    global _previous_track_id, _active_device_id, _poll_counter
+    _poll_counter += 1
+    my_id = _poll_counter
     try:
         pb = sp.current_playback()
         now = time.time()
@@ -198,6 +222,8 @@ def _do_poll(sp):
             if is_playing:
                 maybe_scrobble(track_id, track_name, artists, progress, duration)
 
+            if my_id != _poll_counter:
+                return
             with _lock:
                 _current_data.update({
                     "artist": artists,
@@ -216,6 +242,8 @@ def _do_poll(sp):
                     "track_changed_at": track_changed_at,
                 })
         else:
+            if my_id != _poll_counter:
+                return
             with _lock:
                 _current_data.update({
                     "is_playing": False,
@@ -310,6 +338,11 @@ def pause(sp):
 
 
 def next_track(sp):
+    global _last_skip_cmd
+    now = time.time()
+    if now - _last_skip_cmd < _SKIP_COOLDOWN:
+        return False
+    _last_skip_cmd = now
     try:
         sp.next_track()
         ok = True
@@ -326,12 +359,16 @@ def next_track(sp):
                 except Exception as e2:
                     print("Next retry failed: " + str(e2))
     if ok:
-        threading.Timer(0.3, force_poll).start()
-        threading.Timer(1.0, force_poll).start()
+        force_poll()
     return ok
 
 
 def previous_track(sp):
+    global _last_skip_cmd
+    now = time.time()
+    if now - _last_skip_cmd < _SKIP_COOLDOWN:
+        return False
+    _last_skip_cmd = now
     try:
         sp.previous_track()
         ok = True
@@ -348,8 +385,7 @@ def previous_track(sp):
                 except Exception as e2:
                     print("Previous retry failed: " + str(e2))
     if ok:
-        threading.Timer(0.3, force_poll).start()
-        threading.Timer(1.0, force_poll).start()
+        force_poll()
     return ok
 
 

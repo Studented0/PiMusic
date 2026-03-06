@@ -97,21 +97,37 @@ def _refresh_wp_tokens():
         print("Failed to capture web player tokens")
 
 
+_wp_refreshing = False
+
 def get_web_player_tokens() -> tuple[str, str]:
-    """Return (bearer_token, client_token) for Canvas GraphQL calls."""
+    """Return (bearer_token, client_token) for Canvas GraphQL calls.
+    Never blocks -- returns stale tokens and refreshes in background."""
+    global _wp_refreshing
     with _wp_lock:
-        if _wp_bearer and (time.time() - _wp_token_ts) < WP_TOKEN_TTL:
+        expired = not _wp_bearer or (time.time() - _wp_token_ts) >= WP_TOKEN_TTL
+        if not expired:
             return _wp_bearer, _wp_client_token
-    _refresh_wp_tokens()
-    with _wp_lock:
+        if not _wp_refreshing and SP_DC:
+            _wp_refreshing = True
+            t = threading.Thread(target=_bg_refresh, daemon=True)
+            t.start()
         return _wp_bearer, _wp_client_token
+
+
+def _bg_refresh():
+    global _wp_refreshing
+    try:
+        _refresh_wp_tokens()
+    finally:
+        with _wp_lock:
+            _wp_refreshing = False
 
 
 def start_wp_token_refresh():
     """Kick off initial token capture in a background thread."""
     if not SP_DC:
         return
-    t = threading.Thread(target=_refresh_wp_tokens, daemon=True)
+    t = threading.Thread(target=_bg_refresh, daemon=True)
     t.start()
 
 
