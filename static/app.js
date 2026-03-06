@@ -85,6 +85,7 @@
   var cooldownUntil  = 0;
   var lastTextUpdate = 0;
   var pendingSkip    = false;
+  var pollReqId      = 0;
 
   /* ── Predictive clock ─────────────────────────────── */
 
@@ -149,8 +150,10 @@
     }).catch(function () { return { ok: false }; });
   }
 
+  var emergencyPollTimer = null;
   function emergencyPoll(delayMs) {
-    setTimeout(function () {
+    clearTimeout(emergencyPollTimer);
+    emergencyPollTimer = setTimeout(function () {
       post("/api/force-poll").then(function () { poll(); });
     }, delayMs);
   }
@@ -312,12 +315,15 @@
   /* ── API polling (1s) ─────────────────────────────── */
 
   function poll() {
+    pollReqId += 1;
+    var myReqId = pollReqId;
     return fetch("/api/state").then(function (res) {
       if (!res.ok) return;
       return res.json().then(function (data) {
+        if (myReqId !== pollReqId) return;
         var trackChanged = data.track_id && data.track_id !== state.track_id;
 
-        if (trackChanged && pendingSkip) {
+        if (pendingSkip) {
           pendingSkip = false;
           dom.trackInfo.classList.remove("stale");
         }
@@ -402,8 +408,7 @@
     state.is_playing = true;
     trackChangeLocalTs = performance.now();
     post("/api/next");
-    emergencyPoll(300);
-    emergencyPoll(1000);
+    emergencyPoll(350);
   });
 
   dom.btnPrev.addEventListener("click", function () {
@@ -417,8 +422,7 @@
     state.is_playing = true;
     trackChangeLocalTs = performance.now();
     post("/api/previous");
-    emergencyPoll(300);
-    emergencyPoll(1000);
+    emergencyPoll(350);
   });
 
   /* Volume */
