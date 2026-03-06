@@ -49,7 +49,8 @@
     track_id: "",
     canvas_url: null,
     server_time: 0,
-    track_changed_at: 0
+    track_changed_at: 0,
+    rate_limited_until: 0
   };
 
   var clockMs       = 0;
@@ -272,9 +273,17 @@
         prevRenderedArtist = state.artist;
         dom.artist.textContent = state.artist || "\u2014";
       }
-      if (state.device !== prevRenderedDevice) {
-        prevRenderedDevice = state.device;
-        dom.device.textContent = state.device || "No device";
+      var deviceText = "";
+      if (state.rate_limited_until > 0) {
+        var secLeft = Math.max(0, Math.ceil(state.rate_limited_until - Date.now() / 1000));
+        var minLeft = Math.ceil(secLeft / 60);
+        deviceText = "Rate limited – back in " + (minLeft >= 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
+      } else {
+        deviceText = state.device || "No device";
+      }
+      if (deviceText !== prevRenderedDevice) {
+        prevRenderedDevice = deviceText;
+        dom.device.textContent = deviceText;
       }
     }
 
@@ -355,6 +364,14 @@
 
         Object.assign(state, data);
         dom.player.classList.remove("connecting");
+
+        if (data.rate_limited_until > 0) {
+          var secLeft = Math.ceil(data.rate_limited_until - Date.now() / 1000);
+          var minLeft = Math.ceil(secLeft / 60);
+          dom.device.textContent = "Rate limited – back in " + (minLeft > 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
+        } else if (state.device) {
+          dom.device.textContent = state.device || "No device";
+        }
 
         if (trackChanged) {
           trackChangeLocalTs = now;

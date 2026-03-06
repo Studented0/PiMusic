@@ -2,9 +2,15 @@ import threading
 import time
 import traceback
 from curl_cffi import requests as cffi_requests
+from spotipy.exceptions import SpotifyException
 from album_cache import cache_art, get_dominant_color
 from scrobbler import maybe_scrobble, reset_scrobble
 from spotify_auth import get_web_player_tokens
+
+# Rate limit: when 429 received, back off completely. Retry-After can be 76k+ seconds.
+_rate_limited_until = 0.0
+_rate_limit_lock = threading.Lock()
+RATE_LIMIT_MIN_BACKOFF = 300  # seconds if Retry-After missing (5 min - be conservative)
 
 _current_data = {
     "artist": "",
@@ -34,15 +40,56 @@ _last_play_cmd = 0.0
 _last_pause_cmd = 0.0
 _last_skip_cmd = 0.0
 _CMD_COOLDOWN = 1.0
-_SKIP_COOLDOWN = 0.15
+_SKIP_COOLDOWN = 0.5
 
-POLL_INTERVAL = 1
+POLL_INTERVAL = 5  # Reduced from 1 to avoid rate limits (was 60 req/min, now 12)
 _poll_counter = 0
 _force_poll_timer = None
 _force_poll_timer_lock = threading.Lock()
 
 CANVAS_HASH = "575138ab27cd5c1b3e54da54d0a7cc8d85485402de26340c2145f0f6bb5e7a9f"
 PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v2/query"
+
+
+def _check_rate_limited():
+    """True if we should not make any Spotify API calls."""
+    with _rate_limit_lock:
+        return time.time() < _rate_limited_until
+
+
+def _set_rate_limited(retry_after_sec=None):
+    """Enter backoff. Respect Retry-After or use minimum."""
+    global _rate_limited_until
+    with _rate_limit_lock:
+        sec = RATE_LIMIT_MIN_BACKOFF
+        if retry_after_sec is not None:
+            try:
+                sec = max(int(retry_after_sec), 60)
+            except (ValueError, TypeError):
+                pass
+        _rate_limited_until = time.time() + sec
+        hrs = sec / 3600
+        print(f"RATE LIMITED: backing off for {sec}s ({hrs:.1f}h). No API calls until then.")
+
+
+def _handle_429(e):
+    """If 429, extract Retry-After and set backoff. Return True if handled."""
+    if isinstance(e, SpotifyException) and getattr(e, "http_status", None) == 429:
+        retry_after = None
+        if hasattr(e, "headers") and e.headers:
+            for key in ("retry-after", "Retry-After"):
+                if key in e.headers:
+                    try:
+                        retry_after = int(e.headers[key])
+                        break
+                    except (ValueError, TypeError):
+                        pass
+        _set_rate_limited(retry_after)
+        return True
+    if "429" in str(e):
+        _set_rate_limited(None)
+        return True
+    return False
 
 
 def _canvas_proxy_url(track_id):
@@ -53,7 +100,7 @@ def _canvas_proxy_url(track_id):
 def _fetch_canvas_graphql(track_id):
     """Fetch canvas CDN URL via Spotify's internal GraphQL Pathfinder API."""
     def _work():
-        if not track_id:
+        if not track_id or _check_rate_limited():
             return
         with _canvas_lock:
             if track_id in _canvas_cache:
@@ -132,6 +179,8 @@ def get_canvas_cdn_url(track_id):
 
 def _grab_device(sp):
     global _active_device_id
+    if _check_rate_limited():
+        return _active_device_id
     try:
         devs = sp.devices().get("devices", [])
         for d in devs:
@@ -146,15 +195,23 @@ def _grab_device(sp):
             print("Transferred playback to: " + devs[0].get("name", target[:12]))
             return _active_device_id
         print("No Spotify devices found")
+    except SpotifyException as e:
+        if getattr(e, "http_status", None) == 429:
+            _handle_429(e)
+        else:
+            print("Device grab error: " + str(e))
     except Exception as e:
-        print("Device grab error: " + str(e))
+        if "429" in str(e):
+            _set_rate_limited(None)
+        else:
+            print("Device grab error: " + str(e))
     return _active_device_id
 
 
 def force_poll():
     """Schedule a single debounced poll. Rapid skips reset the timer."""
     global _force_poll_timer
-    if not _sp_ref:
+    if not _sp_ref or _check_rate_limited():
         return
     with _force_poll_timer_lock:
         if _force_poll_timer:
@@ -170,6 +227,8 @@ def force_poll():
 
 def _do_poll(sp):
     global _previous_track_id, _active_device_id, _poll_counter
+    if _check_rate_limited():
+        return
     _poll_counter += 1
     my_id = _poll_counter
     try:
@@ -255,12 +314,21 @@ def _do_poll(sp):
                     "server_time": time.time(),
                     "track_changed_at": 0,
                 })
-    except Exception:
+    except Exception as e:
+        if _handle_429(e):
+            return
         traceback.print_exc()
 
 
 def _poll_loop(sp):
     while True:
+        if _check_rate_limited():
+            with _rate_limit_lock:
+                remaining = _rate_limited_until - time.time()
+            wait = min(60, max(1, remaining))
+            if wait > 0:
+                time.sleep(wait)
+            continue
         _do_poll(sp)
         time.sleep(POLL_INTERVAL)
 
@@ -276,6 +344,8 @@ def start_polling(sp):
 def get_current_data():
     with _lock:
         d = dict(_current_data)
+    with _rate_limit_lock:
+        d["rate_limited_until"] = _rate_limited_until if _rate_limited_until > time.time() else 0
     tid = d.get("track_id", "")
     if tid:
         with _canvas_lock:
@@ -289,14 +359,20 @@ def get_current_data():
 
 def play(sp):
     global _last_play_cmd
+    if _check_rate_limited():
+        return False
     now = time.time()
     if now - _last_play_cmd < _CMD_COOLDOWN:
         return True
+    if _check_rate_limited():
+        return False
     _last_play_cmd = now
     try:
         sp.start_playback()
         return True
     except Exception as e:
+        if _handle_429(e):
+            return False
         err = str(e)
         if "403" in err and "Restriction" in err:
             return True
@@ -314,14 +390,20 @@ def play(sp):
 
 def pause(sp):
     global _last_pause_cmd
+    if _check_rate_limited():
+        return False
     now = time.time()
     if now - _last_pause_cmd < _CMD_COOLDOWN:
         return True
+    if _check_rate_limited():
+        return False
     _last_pause_cmd = now
     try:
         sp.pause_playback()
         return True
     except Exception as e:
+        if _handle_429(e):
+            return False
         err = str(e)
         if "403" in err and "Restriction" in err:
             return True
@@ -339,14 +421,20 @@ def pause(sp):
 
 def next_track(sp):
     global _last_skip_cmd
+    if _check_rate_limited():
+        return False
     now = time.time()
     if now - _last_skip_cmd < _SKIP_COOLDOWN:
+        return False
+    if _check_rate_limited():
         return False
     _last_skip_cmd = now
     try:
         sp.next_track()
         ok = True
     except Exception as e:
+        if _handle_429(e):
+            return False
         err = str(e)
         print("Next failed: " + err)
         ok = False
@@ -365,14 +453,20 @@ def next_track(sp):
 
 def previous_track(sp):
     global _last_skip_cmd
+    if _check_rate_limited():
+        return False
     now = time.time()
     if now - _last_skip_cmd < _SKIP_COOLDOWN:
+        return False
+    if _check_rate_limited():
         return False
     _last_skip_cmd = now
     try:
         sp.previous_track()
         ok = True
     except Exception as e:
+        if _handle_429(e):
+            return False
         err = str(e)
         print("Previous failed: " + err)
         ok = False
