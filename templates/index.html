@@ -11,17 +11,21 @@
   <div id="bg-layer" class="bg-layer"></div>
   <div id="bg-overlay" class="bg-overlay"></div>
 
-  <!-- Canvas video lives outside .player so it can fill the viewport independently -->
+  <!-- Canvas / Cider video lives outside .player so it can fill the viewport independently -->
   <video id="canvas-video" class="canvas-video" autoplay loop muted playsinline></video>
   <div class="retro-overlay"></div>
 
   <main class="player">
-    <!-- Connection / device badge -->
+    <!-- Connection / device badge + source switcher -->
     <div class="topbar">
       <span id="device-badge" class="device-badge">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3Zm7 11a7 7 0 0 1-14 0H3a9 9 0 0 0 8 8.94V23h2v-2.06A9 9 0 0 0 21 12Z"/></svg>
         <span id="device-name">Connecting…</span>
       </span>
+      <div id="source-switcher" class="source-switcher">
+        <button id="src-spotify" class="src-btn src-btn--active" data-source="spotify">Spotify</button>
+        <button id="src-cider" class="src-btn" data-source="cider">Cider</button>
+      </div>
     </div>
 
     <!-- Album art -->
@@ -31,8 +35,8 @@
 
     <!-- Track info -->
     <div class="track-info">
-      <div id="track-title" class="track-title">—</div>
-      <div id="track-artist" class="track-artist">—</div>
+      <div id="track-title" class="track-title">&mdash;</div>
+      <div id="track-artist" class="track-artist">&mdash;</div>
     </div>
 
     <!-- Progress bar -->
@@ -66,6 +70,6 @@
     </div>
   </main>
 
-  <script src="/static/app.js?v=16"></script>
+  <script src="/static/app.js?v=20"></script>
 </body>
 </html>

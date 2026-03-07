@@ -1,6 +1,8 @@
 (function () {
   "use strict";
 
+  /* ── DOM refs ──────────────────────────────────────── */
+
   var $ = function (s) { return document.querySelector(s); };
 
   var dom = {
@@ -22,18 +24,25 @@
     volSlider: $("#volume-slider"),
     device:    $("#device-name"),
     player:    $(".player"),
-    trackInfo: $(".track-info")
+    trackInfo: $(".track-info"),
+    srcSpotify: $("#src-spotify"),
+    srcCider:   $("#src-cider")
   };
 
-  console.error("[PiMusic] app.js v12 loaded at " + new Date().toISOString());
+  console.log("[PiMusic] app.js v20 loaded at " + new Date().toISOString());
+
+  /* ── Constants ─────────────────────────────────────── */
 
   var POLL_MS           = 1000;
+  var POLL_TIMEOUT_MS   = 2000;
   var DRIFT_CORRECT_MS  = 1500;
   var TEXT_UPDATE_MS    = 200;
   var SNAPBACK_GUARD_MS = 5000;
   var BTN_COOLDOWN_MS   = 500;
   var INPUT_LOCK_MS     = 5000;
   var STALE_EXTEND_MS   = 2000;
+
+  /* ── State ─────────────────────────────────────────── */
 
   var state = {
     is_playing: false,
@@ -50,8 +59,12 @@
     canvas_url: null,
     server_time: 0,
     track_changed_at: 0,
-    rate_limited_until: 0
+    rate_limited_until: 0,
+    source: "spotify",
+    active_source: "auto"
   };
+
+  /* ── Predictive clock ──────────────────────────────── */
 
   var clockMs       = 0;
   var clockAnchor   = 0;
@@ -61,6 +74,8 @@
   var driftDuration = 0;
 
   var trackChangeLocalTs = 0;
+
+  /* ── Render cache ──────────────────────────────────── */
 
   var prevRenderedArt     = "";
   var prevRenderedTitle   = "";
@@ -75,6 +90,8 @@
   var canvasMode = false;
   var artworkWrap = $("#artwork-wrap");
 
+  /* ── Input locks ───────────────────────────────────── */
+
   var volDragging    = false;
   var volTimer       = null;
   var volLockUntil   = 0;
@@ -88,7 +105,7 @@
   var pendingSkip    = false;
   var pollReqId      = 0;
 
-  /* ── Predictive clock ─────────────────────────────── */
+  /* ── Predictive clock functions ────────────────────── */
 
   function clockNow() {
     if (!state.is_playing) return clockMs;
@@ -134,7 +151,7 @@
     }
   }
 
-  /* ── Helpers ──────────────────────────────────────── */
+  /* ── Helpers ───────────────────────────────────────── */
 
   function fmt(ms) {
     var total = Math.max(0, Math.round(ms / 1000));
@@ -159,7 +176,35 @@
     }, delayMs);
   }
 
-  /* ── Canvas video (event-driven) ──────────────────── */
+  /* ── Source switcher ───────────────────────────────── */
+
+  function setSourceUI(src) {
+    if (src === "cider") {
+      dom.srcCider.classList.add("src-btn--active");
+      dom.srcSpotify.classList.remove("src-btn--active");
+    } else {
+      dom.srcSpotify.classList.add("src-btn--active");
+      dom.srcCider.classList.remove("src-btn--active");
+    }
+  }
+
+  function switchSource(src) {
+    post("/api/source", { source: src }).then(function () {
+      poll();
+    });
+  }
+
+  dom.srcSpotify.addEventListener("click", function () {
+    setSourceUI("spotify");
+    switchSource("spotify");
+  });
+
+  dom.srcCider.addEventListener("click", function () {
+    setSourceUI("cider");
+    switchSource("cider");
+  });
+
+  /* ── Canvas / video (event-driven) ─────────────────── */
 
   function positionCanvasOverArt() {
     if (canvasMode) return;
@@ -175,7 +220,6 @@
   function applyCanvas(url) {
     if (!url) {
       if (activeCanvasSrc) {
-        console.error("[PiMusic] CANVAS: clearing (no URL)");
         activeCanvasSrc = "";
         exitCinematic();
         dom.canvas.classList.remove("active");
@@ -188,13 +232,10 @@
 
     if (url === activeCanvasSrc) return;
 
-    console.error("[PiMusic] CANVAS: setting src = " + url);
     activeCanvasSrc = url;
-
     dom.canvas.classList.remove("active");
 
     dom.canvas.oncanplay = function () {
-      console.error("[PiMusic] CANVAS: oncanplay -> play()");
       dom.canvas.classList.add("active");
       dom.bg.classList.add("bg-canvas-active");
       if (!canvasMode) positionCanvasOverArt();
@@ -202,7 +243,6 @@
     };
 
     dom.canvas.onerror = function () {
-      console.error("[PiMusic] CANVAS: onerror fired");
       activeCanvasSrc = "";
       dom.canvas.classList.remove("active");
       dom.bg.classList.remove("bg-canvas-active");
@@ -223,17 +263,15 @@
     dom.canvas.style.width    = "";
     dom.canvas.style.height   = "";
     dom.canvas.style.borderRadius = "";
-    console.error("[PiMusic] Cinematic ON");
   }
 
   function exitCinematic() {
     canvasMode = false;
     document.body.classList.remove("canvas-cinematic");
     if (activeCanvasSrc) positionCanvasOverArt();
-    console.error("[PiMusic] Cinematic OFF");
   }
 
-  /* ── Render (60fps via rAF, scaleX progress) ──────── */
+  /* ── Render (60fps via rAF, scaleX progress) ───────── */
 
   function render(timestamp) {
     requestAnimationFrame(render);
@@ -273,11 +311,13 @@
         prevRenderedArtist = state.artist;
         dom.artist.textContent = state.artist || "\u2014";
       }
+
+      /* Device / rate-limit display */
       var deviceText = "";
       if (state.rate_limited_until > 0) {
         var secLeft = Math.max(0, Math.ceil(state.rate_limited_until - Date.now() / 1000));
         var minLeft = Math.ceil(secLeft / 60);
-        deviceText = "Rate limited – back in " + (minLeft >= 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
+        deviceText = "Rate limited \u2013 back in " + (minLeft >= 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
       } else {
         deviceText = state.device || "No device";
       }
@@ -321,12 +361,28 @@
     }
   }
 
-  /* ── API polling (1s) ─────────────────────────────── */
+  /* ── API polling (1s, with 2s AbortController timeout) */
+
+  var pollAbortCtrl = null;
 
   function poll() {
     pollReqId += 1;
     var myReqId = pollReqId;
-    return fetch("/api/state").then(function (res) {
+
+    /* Abort any in-flight poll that's stuck */
+    if (pollAbortCtrl) {
+      try { pollAbortCtrl.abort(); } catch (e) { /* ignore */ }
+    }
+    pollAbortCtrl = new AbortController();
+    var signal = pollAbortCtrl.signal;
+
+    /* 2-second hard timeout */
+    var timeoutId = setTimeout(function () {
+      try { pollAbortCtrl.abort(); } catch (e) { /* ignore */ }
+    }, POLL_TIMEOUT_MS);
+
+    return fetch("/api/state", { signal: signal }).then(function (res) {
+      clearTimeout(timeoutId);
       if (!res.ok) return;
       return res.json().then(function (data) {
         if (myReqId !== pollReqId) return;
@@ -360,18 +416,20 @@
         var incomingProgress = data.progress_ms;
         var incomingCanvas   = data.canvas_url || null;
 
-        console.error("[PiMusic] POLL: track=" + data.track_id + " canvas=" + incomingCanvas);
-
-        Object.assign(state, data);
-        dom.player.classList.remove("connecting");
-
-        if (data.rate_limited_until > 0) {
-          var secLeft = Math.ceil(data.rate_limited_until - Date.now() / 1000);
-          var minLeft = Math.ceil(secLeft / 60);
-          dom.device.textContent = "Rate limited – back in " + (minLeft > 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
-        } else if (state.device) {
-          dom.device.textContent = state.device || "No device";
+        /* Update source switcher UI from server state */
+        if (data.active_source) {
+          var resolved = data.source || "spotify";
+          setSourceUI(resolved);
         }
+
+        /* Merge state */
+        var key;
+        for (key in data) {
+          if (data.hasOwnProperty(key)) {
+            state[key] = data[key];
+          }
+        }
+        dom.player.classList.remove("connecting");
 
         if (trackChanged) {
           trackChangeLocalTs = now;
@@ -386,13 +444,18 @@
         applyCanvas(incomingCanvas);
       });
     }).catch(function (e) {
-      console.error("[PiMusic] Poll error:", e);
+      clearTimeout(timeoutId);
+      if (e && e.name === "AbortError") {
+        console.log("[PiMusic] Poll timed out (2s)");
+      } else {
+        console.log("[PiMusic] Poll error: " + (e ? e.message : "unknown"));
+      }
       dom.player.classList.add("connecting");
       dom.device.textContent = "Reconnecting\u2026";
     });
   }
 
-  /* ── Playback controls ────────────────────────────── */
+  /* ── Playback controls ─────────────────────────────── */
 
   function isCooling() { return performance.now() < cooldownUntil; }
   function setCooldown(ms) { cooldownUntil = performance.now() + ms; }
@@ -442,7 +505,8 @@
     emergencyPoll(350);
   });
 
-  /* Volume */
+  /* ── Volume ────────────────────────────────────────── */
+
   dom.volSlider.addEventListener("pointerdown", function () {
     volDragging = true;
     volBeforeDrag = state.volume;
@@ -462,7 +526,8 @@
     }, 200);
   });
 
-  /* Progress bar seek (drag-to-scrub) */
+  /* ── Progress bar seek (drag-to-scrub) ─────────────── */
+
   function seekFromEvent(e) {
     var rect = dom.bar.getBoundingClientRect();
     var pct  = Math.max(0, Math.min(1, ((e.clientX || e.pageX) - rect.left) / rect.width));
@@ -503,19 +568,18 @@
     seekLockUntil = performance.now() + INPUT_LOCK_MS;
   });
 
-  /* Click artwork to enter cinematic mode */
+  /* ── Cinematic mode events ─────────────────────────── */
+
   artworkWrap.addEventListener("click", function (e) {
     if (!activeCanvasSrc) return;
     e.stopPropagation();
     if (!canvasMode) enterCinematic();
   });
 
-  /* Prevent control clicks from exiting cinematic mode */
   dom.player.addEventListener("click", function (e) {
     if (canvasMode) e.stopPropagation();
   });
 
-  /* Click the video or body background to exit cinematic */
   dom.canvas.addEventListener("click", function () {
     if (canvasMode) exitCinematic();
   });
@@ -523,14 +587,13 @@
     if (canvasMode) exitCinematic();
   });
 
-  /* Keep Old View canvas overlay aligned on resize */
   window.addEventListener("resize", function () {
     if (activeCanvasSrc && !canvasMode) positionCanvasOverArt();
   });
 
-  /* ── Boot ─────────────────────────────────────────── */
+  /* ── Boot ──────────────────────────────────────────── */
 
-  console.error("[PiMusic] Boot: starting poll + render loop");
+  console.log("[PiMusic] Boot: starting poll + render loop");
   dom.player.classList.add("connecting");
   poll();
   setInterval(poll, POLL_MS);

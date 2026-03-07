@@ -158,9 +158,8 @@ def _get_auth_manager():
 def get_spotify_client():
     return spotipy.Spotify(
         auth_manager=_get_auth_manager(),
-        retries=2,
-        backoff_factor=1.0,
-        status_forcelist=(500, 502, 503),  # Never retry 429 - we handle it with backoff
+        retries=0,  # ZERO retries: 429s must not be retried internally (we handle backoff ourselves)
+        status_forcelist=(),
     )
 
 
