@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PiMusic — Settings</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="settings-body">
+  <div class="settings-page">
+    <header class="settings-header">
+      <a href="/" class="settings-back" title="Back to player">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+      </a>
+      <h1>PiMusic Settings</h1>
+    </header>
+
+    <div id="status-bar" class="status-bar hidden"></div>
+
+    <!-- Spotify -->
+    <section class="settings-section">
+      <h2>Spotify</h2>
+      <label class="settings-label">
+        SP_DC Cookie
+        <input type="password" id="spotify_sp_dc" class="settings-input" placeholder="Your sp_dc cookie value">
+      </label>
+      <label class="settings-label">
+        Client ID
+        <input type="text" id="spotify_client_id" class="settings-input" placeholder="Spotify Client ID">
+      </label>
+      <label class="settings-label">
+        Client Secret
+        <input type="password" id="spotify_client_secret" class="settings-input" placeholder="Spotify Client Secret">
+      </label>
+      <label class="settings-label">
+        Redirect URI
+        <input type="text" id="spotify_redirect_uri" class="settings-input" placeholder="http://127.0.0.1:8080">
+      </label>
+      <div class="settings-actions">
+        <button id="btn-test-spotify" class="settings-btn">Test Connection</button>
+        <button id="btn-force-reauth" class="settings-btn settings-btn--danger">Force Re-Auth</button>
+      </div>
+    </section>
+
+    <!-- Cider -->
+    <section class="settings-section">
+      <h2>Cider (Apple Music)</h2>
+      <label class="settings-label">
+        API Token
+        <input type="password" id="cider_token" class="settings-input" placeholder="Cider apptoken">
+      </label>
+      <label class="settings-label">
+        Host
+        <input type="text" id="cider_host" class="settings-input" placeholder="http://127.0.0.1:10767">
+      </label>
+      <label class="settings-label">
+        Storefront
+        <input type="text" id="cider_storefront" class="settings-input" placeholder="us" maxlength="5">
+      </label>
+      <div class="settings-actions">
+        <button id="btn-test-cider" class="settings-btn">Test Connection</button>
+      </div>
+    </section>
+
+    <!-- Source -->
+    <section class="settings-section">
+      <h2>Source</h2>
+      <div class="settings-row">
+        <span class="settings-label-inline">Active source:</span>
+        <span id="active-source" class="source-indicator">—</span>
+      </div>
+      <div class="settings-actions">
+        <button id="btn-source-spotify" class="settings-btn">Switch to Spotify</button>
+        <button id="btn-source-cider" class="settings-btn">Switch to Cider</button>
+      </div>
+    </section>
+
+    <!-- Display -->
+    <section class="settings-section">
+      <h2>Display</h2>
+      <label class="settings-label">
+        Visual Mode
+        <select id="visual_mode" class="settings-input">
+          <option value="canvas_card">Canvas in Artwork Box</option>
+          <option value="canvas_bg">Canvas Behind Artwork</option>
+          <option value="artwork">Album Artwork Only</option>
+        </select>
+      </label>
+      <label class="settings-label">
+        CPU Threshold (%)
+        <div class="settings-range-wrap">
+          <input type="range" id="cpu_threshold" class="settings-range" min="10" max="100" value="75">
+          <span id="cpu_threshold_val">75</span>
+        </div>
+      </label>
+      <label class="settings-toggle-label">
+        <input type="checkbox" id="scanline_overlay" class="settings-checkbox">
+        Scanline Overlay
+      </label>
+      <label class="settings-toggle-label">
+        <input type="checkbox" id="cinematic_auto" class="settings-checkbox">
+        Auto Cinematic Mode
+      </label>
+    </section>
+
+    <!-- System -->
+    <section class="settings-section">
+      <h2>System</h2>
+      <div class="settings-row">
+        <span class="settings-label-inline">CPU Usage:</span>
+        <span id="cpu-usage">—</span>
+      </div>
+      <div class="settings-row">
+        <span class="settings-label-inline">Video Disabled:</span>
+        <span id="video-disabled">—</span>
+      </div>
+      <div class="settings-actions">
+        <button id="btn-clear-cache" class="settings-btn settings-btn--danger">Clear Art Cache</button>
+      </div>
+    </section>
+
+    <div class="settings-footer">
+      <button id="btn-save" class="settings-btn settings-btn--primary">Save Settings</button>
+    </div>
+  </div>
+
+  <script src="/static/settings.js"></script>
+</body>
+</html>

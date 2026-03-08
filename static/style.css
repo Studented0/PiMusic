@@ -6,7 +6,7 @@
   --accent: #1db954;
   --text: #ffffff;
   --text-dim: rgba(255,255,255,.55);
-  --radius: 16px;
+  --radius: 20px;
   --transition: .45s cubic-bezier(.4,0,.2,1);
 }
 
@@ -30,14 +30,16 @@ html,body {
   filter: blur(80px) saturate(1.6) brightness(.55);
   transform: scale(1.3);
   z-index: 0;
+  transition: filter .6s ease, transform .6s ease, opacity .6s ease;
 }
 .bg-overlay {
   position: fixed; inset: 0;
   background: radial-gradient(ellipse at 50% 30%, transparent 0%, rgba(0,0,0,.65) 100%);
   z-index: 1;
+  transition: opacity .6s ease, background .6s ease;
 }
 
-/* ── Player container ────────────────────────────────── */
+/* ── Player container (default: centered card) ──────── */
 .player {
   position: relative; z-index: 2;
   width: 100%; height: 100%;
@@ -56,6 +58,8 @@ html,body {
   width: 100%;
   display: flex;
   justify-content: center;
+  align-items: center;
+  gap: 10px;
   padding-bottom: 4px;
 }
 .device-badge {
@@ -71,6 +75,92 @@ html,body {
   transition: opacity var(--transition);
 }
 
+/* ── Source badge ────────────────────────────────────── */
+.source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 12px;
+  border-radius: 20px;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+  transition: background .3s ease, color .3s ease;
+  cursor: pointer;
+}
+.source-spotify {
+  color: #1db954;
+  background: rgba(29,185,84,.12);
+}
+.source-cider {
+  color: #fc3c44;
+  background: rgba(252,60,68,.12);
+}
+
+/* ── Source dropdown ────────────────────────────────── */
+.source-dropdown-wrap {
+  position: relative;
+}
+.source-arrow {
+  opacity: .5;
+  transition: transform .2s ease;
+  margin-left: 2px;
+}
+.source-dropdown-wrap.open .source-arrow {
+  transform: rotate(180deg);
+}
+.source-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 140px;
+  background: rgba(20, 20, 30, .95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 10px;
+  padding: 4px 0;
+  z-index: 100;
+  opacity: 0;
+  transform: translateX(-50%) translateY(-4px);
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events: none;
+}
+.source-dropdown.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  pointer-events: auto;
+}
+.source-option {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .15s ease;
+  white-space: nowrap;
+}
+.source-option:hover {
+  background: rgba(255,255,255,.08);
+}
+.source-option[data-source="spotify"]:hover { color: #1db954; }
+.source-option[data-source="cider"]:hover { color: #fc3c44; }
+
+/* ── Settings gear link ─────────────────────────────── */
+.settings-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+  opacity: .5;
+  transition: opacity .2s ease;
+  text-decoration: none;
+  padding: 4px;
+}
+.settings-link:hover { opacity: 1; }
+
 /* ── Album art ───────────────────────────────────────── */
 .artwork-wrap {
   position: relative;
@@ -81,36 +171,35 @@ html,body {
   box-shadow: 0 24px 64px rgba(0,0,0,.5);
   flex-shrink: 0;
   transition: box-shadow var(--transition);
+  cursor: pointer;
 }
 .album-art {
   width: 100%; height: 100%;
   object-fit: cover;
   transition: opacity .6s ease;
 }
-/* Default (Old View): video positioned over artwork box via JS */
+
+/* ── Canvas video (card mode: inside artwork box) ── */
 .canvas-video {
   position: absolute;
   top: 0; left: 0;
-  width: 0; height: 0;
+  width: 100%; height: 100%;
   object-fit: cover;
   opacity: 0;
-  transition: opacity 2s ease;
+  transition: opacity .8s ease;
   z-index: 3;
   pointer-events: none;
   border-radius: var(--radius);
-  background: #000;
+  background: transparent;
   image-rendering: -webkit-optimize-contrast;
   transform: translateZ(0);
   -webkit-transform: translateZ(0);
-  filter: contrast(1.2) saturate(1.3) brightness(1.1);
-  -webkit-filter: contrast(1.2) saturate(1.3) brightness(1.1);
+  filter: contrast(1.15) saturate(1.25) brightness(1.05);
+  -webkit-filter: contrast(1.15) saturate(1.25) brightness(1.05);
 }
 .canvas-video.active { opacity: 1; }
-.bg-canvas-active { background-image: none !important; }
 
-.artwork-wrap { cursor: pointer; }
-
-/* Retro scanline overlay – hidden by default, shown in cinematic */
+/* Retro scanline overlay */
 .retro-overlay {
   display: none;
   position: fixed;
@@ -126,7 +215,6 @@ html,body {
 }
 .canvas-cinematic .retro-overlay { display: block; }
 
-
 /* ── Track info ──────────────────────────────────────── */
 .track-info {
   width: 100%;
@@ -136,11 +224,9 @@ html,body {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  transition: opacity .3s ease;
+  transition: opacity .3s ease, text-align .3s ease, padding .5s ease;
 }
-.track-info.stale {
-  opacity: .45;
-}
+.track-info.stale { opacity: .45; }
 .track-title {
   font-size: clamp(18px, 4.5vw, 26px);
   font-weight: 700;
@@ -149,6 +235,7 @@ html,body {
   text-overflow: ellipsis;
   max-width: 100%;
   transition: color var(--transition);
+  text-shadow: 0 1px 6px rgba(0,0,0,.6);
 }
 .track-artist {
   font-size: clamp(13px, 3vw, 16px);
@@ -158,9 +245,10 @@ html,body {
   overflow: hidden;
   text-overflow: ellipsis;
   max-width: 100%;
+  text-shadow: 0 1px 4px rgba(0,0,0,.5);
 }
 
-/* ── Progress bar (GPU-accelerated via scaleX) ────────── */
+/* ── Progress bar ────────────────────────────────────── */
 .progress-wrap {
   display: flex;
   align-items: center;
@@ -173,6 +261,7 @@ html,body {
   min-width: 36px;
   text-align: center;
   font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px rgba(0,0,0,.5);
 }
 .progress-bar {
   flex: 1;
@@ -239,7 +328,7 @@ html,body {
   transition: transform .18s ease, background .18s ease;
   -webkit-tap-highlight-color: transparent;
 }
-.ctrl-btn svg { width: 28px; height: 28px; }
+.ctrl-btn svg { width: 28px; height: 28px; filter: drop-shadow(0 1px 3px rgba(0,0,0,.4)); }
 .ctrl-btn:active { transform: scale(.88); }
 .ctrl-btn:hover { background: rgba(255,255,255,.08); }
 
@@ -250,10 +339,7 @@ html,body {
   border-radius: 50%;
 }
 .ctrl-btn--play svg { width: 32px; height: 32px; }
-.ctrl-btn--play:hover {
-  transform: scale(1.06);
-  background: #fff;
-}
+.ctrl-btn--play:hover { transform: scale(1.06); background: #fff; }
 .ctrl-btn--play:active { transform: scale(.94); }
 
 /* ── Volume ──────────────────────────────────────────── */
@@ -293,19 +379,145 @@ html,body {
   cursor: pointer;
 }
 
-/* ── Idle state ──────────────────────────────────────── */
+/* ── Idle / connecting ──────────────────────────────── */
 .player.idle .artwork-wrap { opacity: .3; }
 .player.idle .track-title { color: var(--text-dim); }
 
-/* ── Animations ──────────────────────────────────────── */
 @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
 .connecting .device-badge { animation: pulse 1.5s infinite; }
 
 @keyframes art-in {
-  from { opacity: 0; transform: scale(.96); }
+  from { opacity: 0; transform: scale(.94); }
   to   { opacity: 1; transform: scale(1);   }
 }
-.album-art.fresh { animation: art-in .6s ease forwards; }
+.album-art.fresh { animation: art-in .5s cubic-bezier(.2,0,.2,1) forwards; }
+
+
+/* ══════════════════════════════════════════════════════════
+   Cinematic mode (fullscreen – toggled by clicking artwork)
+   ══════════════════════════════════════════════════════════ */
+
+/* Clickable exit zone: bg layers become clickable in cinematic */
+.canvas-cinematic .bg-layer,
+.canvas-cinematic .bg-overlay {
+  cursor: pointer;
+  z-index: 4;
+}
+
+/* Video: fullscreen in cinematic (moved to body by JS) */
+.canvas-cinematic > .canvas-video {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  border-radius: 0;
+  z-index: 5;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+/* When canvas is active in cinematic, hide the blurred bg */
+.canvas-cinematic.has-canvas .bg-layer { opacity: 0 !important; }
+.canvas-cinematic.has-canvas .bg-overlay { opacity: 0 !important; }
+
+/* Artwork-only cinematic: sharp album art fills viewport */
+.canvas-cinematic .bg-layer {
+  filter: blur(0px) saturate(1.2) brightness(.45);
+  transform: scale(1.05);
+}
+.canvas-cinematic .bg-overlay {
+  background: linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.3) 40%, transparent 100%);
+}
+
+.canvas-cinematic::after {
+  content: "";
+  position: fixed;
+  bottom: 0; left: 0;
+  width: 100%; height: 55%;
+  background: linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.4) 50%, transparent 100%);
+  z-index: 6;
+  pointer-events: none;
+}
+
+.canvas-cinematic .player {
+  position: fixed;
+  z-index: 10;
+  bottom: 0; left: 0;
+  width: 100%; height: 100%;
+  max-width: none;
+  padding: 0 36px 32px;
+  justify-content: flex-end;
+  background: none;
+}
+
+.canvas-cinematic .topbar {
+  position: fixed;
+  top: 0; left: 0; width: 100%;
+  z-index: 20;
+  padding: 16px 24px;
+  justify-content: center;
+}
+
+.canvas-cinematic .artwork-wrap {
+  width: 0; height: 0;
+  min-height: 0;
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+  box-shadow: none;
+}
+
+.canvas-cinematic .track-info {
+  text-align: left;
+  padding: 0 0 6px;
+  min-height: 0;
+}
+.canvas-cinematic .track-title {
+  font-size: clamp(22px, 5.5vw, 34px);
+  text-shadow: 0 0 15px #000, 0 2px 10px rgba(0,0,0,.9);
+}
+.canvas-cinematic .track-artist {
+  font-size: clamp(14px, 3.5vw, 20px);
+  color: rgba(255,255,255,.8);
+  text-shadow: 0 0 15px #000, 0 1px 8px rgba(0,0,0,.9);
+}
+
+.canvas-cinematic .progress-wrap { padding: 2px 0 10px; }
+.canvas-cinematic .time { text-shadow: 0 0 15px #000; }
+.canvas-cinematic .progress-bar { background: rgba(255,255,255,.25); height: 5px; }
+.canvas-cinematic .progress-fill { box-shadow: 0 0 8px var(--accent); }
+.canvas-cinematic .progress-thumb { width: 14px; height: 14px; box-shadow: 0 0 10px rgba(0,0,0,.6); }
+
+.canvas-cinematic .controls { gap: 32px; }
+.canvas-cinematic .ctrl-btn { filter: drop-shadow(0 2px 6px rgba(0,0,0,.7)); }
+.canvas-cinematic .ctrl-btn--play { box-shadow: 0 4px 20px rgba(0,0,0,.5); }
+
+.canvas-cinematic .volume-wrap { max-width: 220px; }
+.canvas-cinematic .vol-icon { filter: drop-shadow(0 1px 3px rgba(0,0,0,.6)); }
+
+
+/* ══════════════════════════════════════════════════════════
+   Canvas Background mode (fullscreen video behind card UI)
+   ══════════════════════════════════════════════════════════ */
+
+.canvas-background .artwork-wrap {
+  overflow: visible;
+}
+.canvas-background .artwork-wrap > .album-art {
+  border-radius: var(--radius);
+}
+.canvas-background .canvas-video {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100vw; height: 100vh;
+  border-radius: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+.canvas-background.has-canvas .bg-layer { opacity: 0 !important; }
+.canvas-background.has-canvas .bg-overlay {
+  background: radial-gradient(ellipse at 50% 50%, rgba(0,0,0,.4) 0%, rgba(0,0,0,.7) 100%);
+}
+
 
 /* ── 800x480 kiosk optimisation ──────────────────────── */
 @media (max-width: 840px) and (max-height: 520px) {
@@ -318,10 +530,7 @@ html,body {
     gap: 10px;
   }
   .topbar { order: -1; width: 100%; padding-bottom: 0; }
-  .artwork-wrap {
-    width: 180px;
-    flex-shrink: 0;
-  }
+  .artwork-wrap { width: 180px; flex-shrink: 0; }
   .track-info,
   .progress-wrap,
   .controls,
@@ -337,112 +546,6 @@ html,body {
   .volume-wrap { width: calc(100% - 200px); }
 }
 
-/* ── Cinematic mode (iOS lock-screen style) ────────── */
-
-/* Video fills the entire viewport – full-frame, no borders */
-.canvas-cinematic .canvas-video {
-  position: fixed;
-  top: 0; left: 0;
-  width: 100vw; height: 100vh;
-  object-fit: cover;
-  z-index: 5;
-  border-radius: 0;
-  pointer-events: auto;
-  cursor: pointer;
-  background: #000;
-  image-rendering: -webkit-optimize-contrast;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  filter: contrast(1.2) saturate(1.3) brightness(1.1);
-  -webkit-filter: contrast(1.2) saturate(1.3) brightness(1.1);
-}
-
-/* Hide the blurred bg layers – the video IS the background */
-.canvas-cinematic .bg-layer,
-.canvas-cinematic .bg-overlay { opacity: 0; pointer-events: none; }
-
-/* Scrim gradient at the bottom for text legibility */
-.canvas-cinematic::after {
-  content: "";
-  position: fixed;
-  bottom: 0; left: 0;
-  width: 100%; height: 55%;
-  background: linear-gradient(to top, rgba(0,0,0,.85) 0%, rgba(0,0,0,.4) 50%, transparent 100%);
-  z-index: 6;
-  pointer-events: none;
-}
-
-/* Player becomes a bottom-anchored overlay */
-.canvas-cinematic .player {
-  position: fixed;
-  z-index: 10;
-  bottom: 0; left: 0;
-  width: 100%; height: auto;
-  max-width: none;
-  padding: 0 36px 32px;
-  justify-content: flex-end;
-  background: none;
-}
-
-.canvas-cinematic .topbar { display: none; }
-
-/* Hide album art box in cinematic */
-.canvas-cinematic .artwork-wrap {
-  width: 0; height: 0;
-  min-height: 0;
-  overflow: hidden;
-  opacity: 0;
-  position: absolute;
-  pointer-events: none;
-}
-
-/* Track info: left-aligned, bigger, shadowed */
-.canvas-cinematic .track-info {
-  text-align: left;
-  padding: 0 0 6px;
-}
-.canvas-cinematic .track-title {
-  font-size: clamp(22px, 5.5vw, 34px);
-  text-shadow: 0 0 15px #000, 0 2px 10px rgba(0,0,0,.9);
-}
-.canvas-cinematic .track-artist {
-  font-size: clamp(14px, 3.5vw, 20px);
-  color: rgba(255,255,255,.8);
-  text-shadow: 0 0 15px #000, 0 1px 8px rgba(0,0,0,.9);
-}
-
-/* Progress bar */
-.canvas-cinematic .progress-wrap { padding: 2px 0 10px; }
-.canvas-cinematic .time {
-  text-shadow: 0 0 15px #000, 0 1px 6px rgba(0,0,0,.9);
-}
-.canvas-cinematic .progress-bar {
-  background: rgba(255,255,255,.25);
-  height: 5px;
-}
-.canvas-cinematic .progress-fill {
-  box-shadow: 0 0 8px var(--accent);
-}
-.canvas-cinematic .progress-thumb {
-  width: 14px; height: 14px;
-  box-shadow: 0 0 10px rgba(0,0,0,.6);
-}
-
-/* Controls */
-.canvas-cinematic .controls { gap: 32px; }
-.canvas-cinematic .ctrl-btn {
-  filter: drop-shadow(0 2px 6px rgba(0,0,0,.7));
-}
-.canvas-cinematic .ctrl-btn--play {
-  box-shadow: 0 4px 20px rgba(0,0,0,.5);
-}
-
-/* Volume */
-.canvas-cinematic .volume-wrap { max-width: 220px; }
-.canvas-cinematic .vol-icon {
-  filter: drop-shadow(0 1px 3px rgba(0,0,0,.6));
-}
-
 /* ── Touch-friendly sizing ───────────────────────────── */
 @media (pointer: coarse) {
   .ctrl-btn { padding: 16px; }
@@ -453,3 +556,144 @@ html,body {
   .volume-slider::-webkit-slider-thumb { width: 22px; height: 22px; }
   .progress-bar { height: 8px; }
 }
+
+
+/* ══════════════════════════════════════════════════════════
+   Settings Page
+   ══════════════════════════════════════════════════════════ */
+
+.settings-body {
+  overflow: auto;
+  background: var(--bg);
+}
+
+.settings-page {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.settings-header h1 { font-size: 22px; font-weight: 700; }
+.settings-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  text-decoration: none;
+  padding: 8px;
+  border-radius: 50%;
+  transition: background .2s ease;
+}
+.settings-back:hover { background: rgba(255,255,255,.08); }
+
+.settings-section {
+  background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 16px;
+}
+.settings-section h2 {
+  font-size: 15px; font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: .5px;
+  margin-bottom: 16px;
+}
+
+.settings-label { display: block; font-size: 13px; color: var(--text-dim); margin-bottom: 14px; }
+
+.settings-input {
+  display: block; width: 100%; margin-top: 6px;
+  padding: 10px 14px; font-size: 14px;
+  color: var(--text);
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px; outline: none;
+  font-family: inherit;
+  transition: border-color .2s ease;
+}
+.settings-input:focus { border-color: var(--accent); }
+.settings-input::placeholder { color: rgba(255,255,255,.25); }
+
+select.settings-input {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1l4 4 4-4' stroke='rgba(255,255,255,0.5)' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+  cursor: pointer;
+}
+select.settings-input option {
+  background: #1a1a2a;
+  color: var(--text);
+  padding: 8px 14px;
+}
+
+.settings-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+
+.settings-btn {
+  padding: 8px 18px; font-size: 13px; font-weight: 600;
+  color: var(--text);
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px; cursor: pointer;
+  font-family: inherit;
+  transition: background .2s ease;
+}
+.settings-btn:hover { background: rgba(255,255,255,.14); }
+.settings-btn--primary { background: var(--accent); color: #000; border-color: var(--accent); }
+.settings-btn--primary:hover { background: #1ed760; }
+.settings-btn--danger { color: #ff6b6b; border-color: rgba(255,107,107,.25); }
+.settings-btn--danger:hover { background: rgba(255,107,107,.12); }
+
+.settings-row { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; font-size: 13px; }
+.settings-label-inline { color: var(--text-dim); }
+
+.source-indicator { font-weight: 600; font-size: 13px; }
+.source-indicator--spotify { color: #1db954; }
+.source-indicator--cider   { color: #fc3c44; }
+
+.settings-range-wrap { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.settings-range {
+  flex: 1; -webkit-appearance: none; appearance: none;
+  height: 5px; background: rgba(255,255,255,.15);
+  border-radius: 3px; outline: none; cursor: pointer;
+}
+.settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 16px; height: 16px;
+  background: #fff; border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0,0,0,.4); cursor: pointer;
+}
+.settings-range-wrap span {
+  min-width: 28px; text-align: right;
+  font-size: 14px; font-weight: 600; color: var(--text);
+}
+
+.settings-toggle-label {
+  display: flex; align-items: center; gap: 10px;
+  font-size: 13px; color: var(--text-dim);
+  margin-bottom: 10px; cursor: pointer;
+}
+.settings-checkbox { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+
+.settings-footer { display: flex; justify-content: center; padding-top: 8px; }
+.settings-footer .settings-btn--primary { padding: 12px 40px; font-size: 15px; }
+
+.status-bar {
+  padding: 10px 16px; border-radius: 8px;
+  font-size: 13px; font-weight: 600;
+  text-align: center; margin-bottom: 16px;
+  transition: opacity .3s ease;
+}
+.status-ok { color: #1db954; background: rgba(29,185,84,.12); border: 1px solid rgba(29,185,84,.2); }
+.status-error { color: #ff6b6b; background: rgba(255,107,107,.12); border: 1px solid rgba(255,107,107,.2); }

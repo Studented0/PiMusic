@@ -4,8 +4,8 @@ import traceback
 from curl_cffi import requests as cffi_requests
 from spotipy.exceptions import SpotifyException
 from album_cache import cache_art, get_dominant_color
-from scrobbler import maybe_scrobble, reset_scrobble
-from spotify_auth import get_web_player_tokens
+from scrobbler import update as scrobbler_update, reset as scrobbler_reset
+from spotify_auth import get_web_player_tokens, start_wp_token_refresh
 
 # Rate limit: when 429 received, back off completely. Retry-After can be 76k+ seconds.
 _rate_limited_until = 0.0
@@ -97,8 +97,31 @@ def _canvas_proxy_url(track_id):
     return "/api/canvas/" + track_id + ".mp4"
 
 
+def _canvas_graphql_request(track_id, bearer, client_token):
+    """Single GraphQL request for canvas. Returns (status_code, cdn_url_or_None)."""
+    resp = cffi_requests.post(PATHFINDER_URL, json={
+        "operationName": "canvas",
+        "variables": {"trackUri": "spotify:track:" + track_id},
+        "extensions": {
+            "persistedQuery": {"version": 1, "sha256Hash": CANVAS_HASH}
+        },
+    }, headers={
+        "Authorization": "Bearer " + bearer,
+        "client-token": client_token,
+        "Content-Type": "application/json",
+    }, impersonate="chrome131", timeout=10)
+
+    if resp.status_code == 200:
+        data = resp.json() or {}
+        track_union = (data.get("data") or {}).get("trackUnion") or {}
+        canvas = track_union.get("canvas") or {}
+        return resp.status_code, canvas.get("url", "") or None
+    return resp.status_code, None
+
+
 def _fetch_canvas_graphql(track_id):
-    """Fetch canvas CDN URL via Spotify's internal GraphQL Pathfinder API."""
+    """Fetch canvas CDN URL via Spotify's internal GraphQL Pathfinder API.
+    On 403, triggers a background token refresh and retries once."""
     def _work():
         if not track_id or _check_rate_limited():
             return
@@ -117,31 +140,30 @@ def _fetch_canvas_graphql(track_id):
                 print("Canvas skip: no bearer token yet")
                 return
 
-            resp = cffi_requests.post(PATHFINDER_URL, json={
-                "operationName": "canvas",
-                "variables": {"trackUri": "spotify:track:" + track_id},
-                "extensions": {
-                    "persistedQuery": {"version": 1, "sha256Hash": CANVAS_HASH}
-                },
-            }, headers={
-                "Authorization": "Bearer " + bearer,
-                "client-token": client_token,
-                "Content-Type": "application/json",
-            }, impersonate="chrome131", timeout=10)
+            status, cdn_url = _canvas_graphql_request(track_id, bearer, client_token)
 
-            if resp.status_code == 200:
-                data = resp.json() or {}
-                track_union = (data.get("data") or {}).get("trackUnion") or {}
-                canvas = track_union.get("canvas") or {}
-                cdn_url = canvas.get("url", "") or None
+            if status == 200:
                 if cdn_url:
                     print("Canvas found for " + track_id + ": " + cdn_url[:60] + "...")
                 else:
                     print("Canvas: track " + track_id + " has no canvas")
-            elif resp.status_code == 403:
-                print("Canvas RBAC denied for " + track_id + " (token may need refresh)")
+            elif status == 403:
+                print("Canvas 403 for " + track_id + " – forcing token refresh and retrying...")
+                start_wp_token_refresh()
+                time.sleep(12)
+                bearer2, client_token2 = get_web_player_tokens()
+                if bearer2 and bearer2 != bearer:
+                    status2, cdn_url = _canvas_graphql_request(track_id, bearer2, client_token2)
+                    if status2 == 200 and cdn_url:
+                        print("Canvas retry succeeded for " + track_id)
+                    elif status2 == 200:
+                        print("Canvas: track " + track_id + " has no canvas (after retry)")
+                    else:
+                        print("Canvas retry still " + str(status2) + " for " + track_id)
+                else:
+                    print("Canvas: token refresh did not yield new token")
             else:
-                print("Canvas GraphQL " + str(resp.status_code) + " for " + track_id)
+                print("Canvas GraphQL " + str(status) + " for " + track_id)
 
         except Exception as e:
             print("Canvas error for " + track_id + ": " + str(e))
@@ -259,7 +281,7 @@ def _do_poll(sp):
             track_changed = track_id != _previous_track_id
 
             if track_changed:
-                reset_scrobble()
+                scrobbler_reset()
                 _previous_track_id = track_id
                 local_art = cache_art(art_url) if art_url else ""
                 color = get_dominant_color(art_url) if art_url else "#1a1a2e"
@@ -278,8 +300,7 @@ def _do_poll(sp):
                     local_art = cache_art(art_url) if art_url else ""
                 color = prev_color if prev_color != "#1a1a2e" else (get_dominant_color(art_url) if art_url else "#1a1a2e")
 
-            if is_playing:
-                maybe_scrobble(track_id, track_name, artists, progress, duration)
+            scrobbler_update(track_id, track_name, artists, duration, is_playing, progress)
 
             if my_id != _poll_counter:
                 return
@@ -354,7 +375,14 @@ def get_current_data():
             d["canvas_url"] = _canvas_proxy_url(tid)
         else:
             d["canvas_url"] = None
+    d["visual_type"] = "canvas_video" if d.get("canvas_url") else "image"
     return d
+
+
+def is_playing_active():
+    """Quick check for source manager – is Spotify currently playing?"""
+    with _lock:
+        return _current_data.get("is_playing", False)
 
 
 def play(sp):
@@ -504,3 +532,60 @@ def set_volume(sp, volume_percent):
     except Exception as e:
         print("Volume failed: " + str(e))
         return False
+
+
+def fetch_canvas_for_external(track_id, callback):
+    """Fetch the Spotify Canvas for *any* track_id (used by cider_controller
+    for cross-source Canvas).  Runs asynchronously; calls
+    callback(track_id, proxy_url_or_None) when done."""
+    def _work():
+        with _canvas_lock:
+            cached = _canvas_cache.get(track_id)
+            if cached is not None:
+                callback(track_id, _canvas_proxy_url(track_id) if cached else None)
+                return
+            if track_id in _canvas_cache:
+                callback(track_id, None)
+                return
+
+        if _check_rate_limited() or not track_id:
+            callback(track_id, None)
+            return
+
+        cdn_url = None
+        try:
+            bearer, client_token = get_web_player_tokens()
+            if not bearer:
+                print("[Canvas External] No bearer token")
+                callback(track_id, None)
+                return
+
+            status, cdn_url = _canvas_graphql_request(track_id, bearer, client_token)
+
+            if status == 200:
+                if cdn_url:
+                    print(f"[Canvas External] Found for {track_id}: {cdn_url[:60]}...")
+                else:
+                    print(f"[Canvas External] No canvas for {track_id}")
+            elif status == 403:
+                print(f"[Canvas External] 403 for {track_id}, refreshing token...")
+                start_wp_token_refresh()
+                time.sleep(12)
+                bearer2, ct2 = get_web_player_tokens()
+                if bearer2 and bearer2 != bearer:
+                    status2, cdn_url = _canvas_graphql_request(track_id, bearer2, ct2)
+                    if status2 == 200 and cdn_url:
+                        print(f"[Canvas External] Retry OK for {track_id}")
+            else:
+                print(f"[Canvas External] Status {status} for {track_id}")
+
+        except Exception as e:
+            print(f"[Canvas External] Error for {track_id}: {e}")
+
+        with _canvas_lock:
+            _canvas_cache[track_id] = cdn_url
+
+        proxy = _canvas_proxy_url(track_id) if cdn_url else None
+        callback(track_id, proxy)
+
+    threading.Thread(target=_work, daemon=True).start()

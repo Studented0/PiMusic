@@ -22,10 +22,14 @@
     volSlider: $("#volume-slider"),
     device:    $("#device-name"),
     player:    $(".player"),
-    trackInfo: $(".track-info")
+    trackInfo: $(".track-info"),
+    sourceBadge: $("#source-badge"),
+    sourceLabel: $("#source-label"),
+    sourceIconSpotify: $("#source-icon-spotify"),
+    sourceIconCider:   $("#source-icon-cider")
   };
 
-  console.error("[PiMusic] app.js v12 loaded at " + new Date().toISOString());
+  console.error("[PiMusic] app.js v25 loaded at " + new Date().toISOString());
 
   var POLL_MS           = 1000;
   var DRIFT_CORRECT_MS  = 1500;
@@ -48,9 +52,12 @@
     volume: 50,
     track_id: "",
     canvas_url: null,
+    visual_type: "image",
+    source: "spotify",
     server_time: 0,
     track_changed_at: 0,
-    rate_limited_until: 0
+    rate_limited_until: 0,
+    cpu_throttled: false
   };
 
   var clockMs       = 0;
@@ -70,9 +77,12 @@
   var prevTimeCurText     = "";
   var prevTimeTotalText   = "";
   var prevPct             = -1;
+  var prevSource          = "";
 
   var activeCanvasSrc = "";
+  var activeVisualType = "image";
   var canvasMode = false;
+  var visualMode = "canvas_card";
   var artworkWrap = $("#artwork-wrap");
 
   var volDragging    = false;
@@ -83,12 +93,13 @@
   var seekTimer      = null;
   var seekLockUntil  = 0;
   var seekTarget     = 0;
-  var cooldownUntil  = 0;
-  var lastTextUpdate = 0;
-  var pendingSkip    = false;
-  var pollReqId      = 0;
+  var cooldownUntil      = 0;
+  var lastTextUpdate     = 0;
+  var pendingSkip        = false;
+  var pollReqId          = 0;
+  var playbackLockUntil  = 0;
 
-  /* ── Predictive clock ─────────────────────────────── */
+  /* ── Predictive clock ─────────────────────────────────── */
 
   function clockNow() {
     if (!state.is_playing) return clockMs;
@@ -134,7 +145,7 @@
     }
   }
 
-  /* ── Helpers ──────────────────────────────────────── */
+  /* ── Helpers ──────────────────────────────────────────── */
 
   function fmt(ms) {
     var total = Math.max(0, Math.round(ms / 1000));
@@ -159,81 +170,137 @@
     }, delayMs);
   }
 
-  /* ── Canvas video (event-driven) ──────────────────── */
+  /* ── Canvas video ──────────────────────────────────────── */
 
-  function positionCanvasOverArt() {
-    if (canvasMode) return;
-    var rect = artworkWrap.getBoundingClientRect();
-    dom.canvas.style.position = "absolute";
-    dom.canvas.style.top      = rect.top + "px";
-    dom.canvas.style.left     = rect.left + "px";
-    dom.canvas.style.width    = rect.width + "px";
-    dom.canvas.style.height   = rect.height + "px";
-    dom.canvas.style.borderRadius = "var(--radius)";
+  function clearCanvas() {
+    dom.canvas.classList.remove("active");
+    dom.canvas.removeAttribute("src");
+    dom.canvas.load();
+    document.body.classList.remove("has-canvas");
+    if (canvasMode) exitCinematic();
   }
 
-  function applyCanvas(url) {
-    if (!url) {
+  function applyCanvas(url, visualType) {
+    syncBackgroundMode();
+
+    if (!url || visualType === "image") {
       if (activeCanvasSrc) {
-        console.error("[PiMusic] CANVAS: clearing (no URL)");
+        console.error("[PiMusic] CANVAS: clearing");
         activeCanvasSrc = "";
-        exitCinematic();
-        dom.canvas.classList.remove("active");
-        dom.canvas.removeAttribute("src");
-        dom.canvas.load();
-        dom.bg.classList.remove("bg-canvas-active");
+        activeVisualType = "image";
+        clearCanvas();
       }
       return;
     }
 
-    if (url === activeCanvasSrc) return;
+    if (url === activeCanvasSrc && visualType === activeVisualType) return;
 
-    console.error("[PiMusic] CANVAS: setting src = " + url);
+    console.error("[PiMusic] CANVAS: setting src = " + url + " type=" + visualType);
     activeCanvasSrc = url;
+    activeVisualType = visualType;
 
     dom.canvas.classList.remove("active");
 
     dom.canvas.oncanplay = function () {
       console.error("[PiMusic] CANVAS: oncanplay -> play()");
       dom.canvas.classList.add("active");
-      dom.bg.classList.add("bg-canvas-active");
-      if (!canvasMode) positionCanvasOverArt();
+      document.body.classList.add("has-canvas");
       dom.canvas.play().catch(function () {});
     };
 
     dom.canvas.onerror = function () {
       console.error("[PiMusic] CANVAS: onerror fired");
       activeCanvasSrc = "";
-      dom.canvas.classList.remove("active");
-      dom.bg.classList.remove("bg-canvas-active");
+      activeVisualType = "image";
+      clearCanvas();
     };
 
     dom.canvas.src = url;
     dom.canvas.load();
   }
 
-  /* ── Cinematic mode toggle ─────────────────────────── */
+  /* ── Source badge ──────────────────────────────────────── */
+
+  function updateSourceBadge(source) {
+    if (source === prevSource) return;
+    prevSource = source;
+
+    if (dom.sourceIconSpotify && dom.sourceIconCider && dom.sourceLabel && dom.sourceBadge) {
+      if (source === "cider") {
+        dom.sourceIconSpotify.classList.add("hidden");
+        dom.sourceIconCider.classList.remove("hidden");
+        dom.sourceLabel.textContent = "Apple Music";
+        dom.sourceBadge.classList.remove("source-spotify");
+        dom.sourceBadge.classList.add("source-cider");
+      } else {
+        dom.sourceIconCider.classList.add("hidden");
+        dom.sourceIconSpotify.classList.remove("hidden");
+        dom.sourceLabel.textContent = "Spotify";
+        dom.sourceBadge.classList.remove("source-cider");
+        dom.sourceBadge.classList.add("source-spotify");
+      }
+    }
+  }
+
+  /* ── Source dropdown ──────────────────────────────────── */
+
+  var sourceDropdown = document.getElementById("source-dropdown");
+  var sourceDropdownWrap = dom.sourceBadge ? dom.sourceBadge.parentElement : null;
+
+  if (dom.sourceBadge && sourceDropdown && sourceDropdownWrap) {
+    dom.sourceBadge.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var isOpen = sourceDropdownWrap.classList.contains("open");
+      if (isOpen) {
+        sourceDropdown.classList.remove("visible");
+        sourceDropdownWrap.classList.remove("open");
+      } else {
+        sourceDropdown.classList.remove("hidden");
+        sourceDropdown.classList.add("visible");
+        sourceDropdownWrap.classList.add("open");
+      }
+    });
+
+    var options = sourceDropdown.querySelectorAll(".source-option");
+    for (var i = 0; i < options.length; i++) {
+      options[i].addEventListener("click", function (e) {
+        e.stopPropagation();
+        var src = this.getAttribute("data-source");
+        post("/api/source", { source: src });
+        sourceDropdown.classList.remove("visible");
+        sourceDropdownWrap.classList.remove("open");
+      });
+    }
+
+    document.addEventListener("click", function () {
+      sourceDropdown.classList.remove("visible");
+      sourceDropdownWrap.classList.remove("open");
+    });
+  }
+
+  /* ── Cinematic mode toggle ─────────────────────────────── */
 
   function enterCinematic() {
     canvasMode = true;
+    document.body.insertBefore(dom.canvas, document.body.firstChild);
     document.body.classList.add("canvas-cinematic");
-    dom.canvas.style.position = "";
-    dom.canvas.style.top      = "";
-    dom.canvas.style.left     = "";
-    dom.canvas.style.width    = "";
-    dom.canvas.style.height   = "";
-    dom.canvas.style.borderRadius = "";
-    console.error("[PiMusic] Cinematic ON");
   }
 
   function exitCinematic() {
     canvasMode = false;
     document.body.classList.remove("canvas-cinematic");
-    if (activeCanvasSrc) positionCanvasOverArt();
-    console.error("[PiMusic] Cinematic OFF");
+    artworkWrap.appendChild(dom.canvas);
   }
 
-  /* ── Render (60fps via rAF, scaleX progress) ──────── */
+  function syncBackgroundMode() {
+    if (visualMode === "canvas_bg") {
+      document.body.classList.add("canvas-background");
+    } else {
+      document.body.classList.remove("canvas-background");
+    }
+  }
+
+  /* ── Render (60fps via rAF, scaleX progress) ──────────── */
 
   function render(timestamp) {
     requestAnimationFrame(render);
@@ -277,9 +344,12 @@
       if (state.rate_limited_until > 0) {
         var secLeft = Math.max(0, Math.ceil(state.rate_limited_until - Date.now() / 1000));
         var minLeft = Math.ceil(secLeft / 60);
-        deviceText = "Rate limited – back in " + (minLeft >= 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
+        deviceText = "Rate limited \u2013 back in " + (minLeft >= 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
       } else {
         deviceText = state.device || "No device";
+      }
+      if (state.cpu_throttled) {
+        deviceText += " \u00b7 CPU throttled";
       }
       if (deviceText !== prevRenderedDevice) {
         prevRenderedDevice = deviceText;
@@ -312,16 +382,13 @@
         void dom.art.offsetWidth;
         dom.art.src = artSrc;
         dom.art.classList.add("fresh");
-        if (!state.canvas_url) {
-          dom.bg.style.backgroundImage = "url(\"" + artSrc + "\")";
-        }
-        if (activeCanvasSrc && !canvasMode) positionCanvasOverArt();
+        dom.bg.style.backgroundImage = "url(\"" + artSrc + "\")";
       };
       img.src = artSrc;
     }
   }
 
-  /* ── API polling (1s) ─────────────────────────────── */
+  /* ── API polling (1s) ─────────────────────────────────── */
 
   function poll() {
     pollReqId += 1;
@@ -347,6 +414,12 @@
           data.volume = state.volume;
         }
 
+        /* Playback lock */
+        if (now < playbackLockUntil && !trackChanged) {
+          data.is_playing = state.is_playing;
+          data.progress_ms = undefined;
+        }
+
         /* Seek lock */
         if (seekDragging || (now < seekLockUntil && !trackChanged)) {
           data.progress_ms = undefined;
@@ -359,16 +432,20 @@
 
         var incomingProgress = data.progress_ms;
         var incomingCanvas   = data.canvas_url || null;
-
-        console.error("[PiMusic] POLL: track=" + data.track_id + " canvas=" + incomingCanvas);
+        var incomingVisual   = (data.visual_type === "canvas_video") ? "canvas_video" : "image";
+        var incomingSource   = data.source || "spotify";
+        state.cpu_throttled  = !!data.cpu_throttled;
+        if (data.visual_mode) visualMode = data.visual_mode;
 
         Object.assign(state, data);
         dom.player.classList.remove("connecting");
 
+        updateSourceBadge(incomingSource);
+
         if (data.rate_limited_until > 0) {
           var secLeft = Math.ceil(data.rate_limited_until - Date.now() / 1000);
           var minLeft = Math.ceil(secLeft / 60);
-          dom.device.textContent = "Rate limited – back in " + (minLeft > 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
+          dom.device.textContent = "Rate limited \u2013 back in " + (minLeft > 60 ? Math.ceil(minLeft / 60) + "h" : minLeft + " min");
         } else if (state.device) {
           dom.device.textContent = state.device || "No device";
         }
@@ -383,7 +460,7 @@
           clockApplyDrift(incomingProgress);
         }
 
-        applyCanvas(incomingCanvas);
+        applyCanvas(incomingCanvas, incomingVisual);
       });
     }).catch(function (e) {
       console.error("[PiMusic] Poll error:", e);
@@ -392,7 +469,7 @@
     });
   }
 
-  /* ── Playback controls ────────────────────────────── */
+  /* ── Playback controls ────────────────────────────────── */
 
   function isCooling() { return performance.now() < cooldownUntil; }
   function setCooldown(ms) { cooldownUntil = performance.now() + ms; }
@@ -400,6 +477,7 @@
   dom.btnPlay.addEventListener("click", function () {
     if (isCooling()) return;
     setCooldown(BTN_COOLDOWN_MS);
+    playbackLockUntil = performance.now() + 1500;
     if (state.is_playing) {
       state.is_playing = false;
       clockMs     = clockNow();
@@ -420,7 +498,8 @@
     pendingSkip = true;
     dom.trackInfo.classList.add("stale");
     state.canvas_url = null;
-    applyCanvas(null);
+    state.visual_type = "image";
+    applyCanvas(null, "image");
     clockSet(0);
     state.is_playing = true;
     trackChangeLocalTs = performance.now();
@@ -434,7 +513,8 @@
     pendingSkip = true;
     dom.trackInfo.classList.add("stale");
     state.canvas_url = null;
-    applyCanvas(null);
+    state.visual_type = "image";
+    applyCanvas(null, "image");
     clockSet(0);
     state.is_playing = true;
     trackChangeLocalTs = performance.now();
@@ -503,32 +583,44 @@
     seekLockUntil = performance.now() + INPUT_LOCK_MS;
   });
 
-  /* Click artwork to enter cinematic mode */
+  /* Click artwork to toggle cinematic mode (not in canvas_bg — already fullscreen) */
   artworkWrap.addEventListener("click", function (e) {
-    if (!activeCanvasSrc) return;
     e.stopPropagation();
-    if (!canvasMode) enterCinematic();
+    if (!canvasMode && visualMode !== "canvas_bg") enterCinematic();
   });
 
-  /* Prevent control clicks from exiting cinematic mode */
+  /* In cinematic: clicking player background exits, clicking controls doesn't */
   dom.player.addEventListener("click", function (e) {
-    if (canvasMode) e.stopPropagation();
+    if (!canvasMode) return;
+    if (e.target === dom.player) {
+      exitCinematic();
+    } else {
+      e.stopPropagation();
+    }
   });
 
-  /* Click the video or body background to exit cinematic */
-  dom.canvas.addEventListener("click", function () {
-    if (canvasMode) exitCinematic();
+  /* Click the fullscreen canvas video to exit */
+  dom.canvas.addEventListener("click", function (e) {
+    if (canvasMode) { e.stopPropagation(); exitCinematic(); }
   });
+
+  /* Click the bg-layer or bg-overlay to exit (artwork-only fullscreen) */
+  dom.bg.addEventListener("click", function (e) {
+    if (canvasMode) { e.stopPropagation(); exitCinematic(); }
+  });
+  var bgOverlay = $("#bg-overlay");
+  if (bgOverlay) {
+    bgOverlay.addEventListener("click", function (e) {
+      if (canvasMode) { e.stopPropagation(); exitCinematic(); }
+    });
+  }
+
+  /* Fallback: click body to exit */
   document.body.addEventListener("click", function () {
     if (canvasMode) exitCinematic();
   });
 
-  /* Keep Old View canvas overlay aligned on resize */
-  window.addEventListener("resize", function () {
-    if (activeCanvasSrc && !canvasMode) positionCanvasOverArt();
-  });
-
-  /* ── Boot ─────────────────────────────────────────── */
+  /* ── Boot ─────────────────────────────────────────────── */
 
   console.error("[PiMusic] Boot: starting poll + render loop");
   dom.player.classList.add("connecting");
