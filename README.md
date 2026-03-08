@@ -240,4 +240,4 @@ chromium-browser --kiosk --noerrdialogs --disable-infobars http://127.0.0.1:5000
 
 ## License
 
-This project is not currently licensed. Add a `LICENSE` file to specify terms.
+This project is licensed under the [MIT License](LICENSE).
