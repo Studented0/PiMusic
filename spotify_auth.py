@@ -13,7 +13,8 @@ CACHE_PATH = os.path.expanduser("~/pimusic/.spotify_cache")
 SCOPES = (
     "user-read-playback-state "
     "user-read-currently-playing "
-    "user-modify-playback-state"
+    "user-modify-playback-state "
+    "user-read-email"
 )
 
 def _load_sp_dc() -> str:
@@ -171,3 +172,53 @@ def get_access_token() -> str:
     if not token_info or am.is_token_expired(token_info):
         token_info = am.refresh_access_token(token_info["refresh_token"])
     return token_info["access_token"]
+
+
+def get_account_info() -> str:
+    """Return displayable account string: 'Name (email)' or just name."""
+    try:
+        sp = spotipy.Spotify(auth_manager=_get_auth_manager())
+        me = sp.me()
+        name = me.get("display_name") or me.get("id", "unknown")
+        email = me.get("email", "")
+        return f"{name} ({email})" if email else name
+    except Exception:
+        return "unknown"
+
+
+def force_reauth():
+    """Delete cached OAuth token and restart web player token capture.
+    Called from /api/force-reauth when tokens are stale or broken."""
+    global _auth_manager
+    print("[Spotify Auth] Clearing cached tokens...")
+    try:
+        if os.path.isfile(CACHE_PATH):
+            os.remove(CACHE_PATH)
+            print(f"[Spotify Auth] Deleted token cache: {CACHE_PATH}")
+    except Exception as e:
+        print(f"[Spotify Auth] Failed to delete token cache: {e}")
+    _auth_manager = None
+    print("[Spotify Auth] Restarting token capture...")
+    start_wp_token_refresh()
+    print("[Spotify Auth] Waiting for captcha completion...")
+
+
+if __name__ == "__main__":
+    import sys
+    if "--reauth" in sys.argv:
+        print("[Spotify Auth] Starting re-authentication...")
+        force_reauth()
+        try:
+            sp = get_spotify_client()
+            me = sp.me()
+            name = me.get("display_name") or me.get("id", "unknown")
+            email = me.get("email", "")
+            label = f"{name} ({email})" if email else name
+            print(f"[Spotify Auth] Authenticating account: {label}")
+            print("[Spotify Auth] Authentication successful.")
+        except Exception as e:
+            print(f"[Spotify Auth] Auth failed: {e}")
+            print("[Spotify Auth] You may need to complete a captcha in the browser.")
+            sys.exit(1)
+    else:
+        print("Usage: python spotify_auth.py --reauth")
