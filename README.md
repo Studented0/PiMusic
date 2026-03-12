@@ -14,7 +14,6 @@ A cinematic music display for Spotify and Apple Music (via Cider), built to run 
 
 ![Cinematic fullscreen mode](screenshots/cinematic.png)
 
-> Replace the images above with your own screenshots. Create a `screenshots/` folder in the project root and add `canvas_card.png`, `canvas_bg.png`, and `cinematic.png`.
 
 ---
 
@@ -41,7 +40,7 @@ A cinematic music display for Spotify and Apple Music (via Cider), built to run 
 | **Canvas Behind Artwork** | Canvas video fills the screen behind the centered card UI. |
 | **Album Artwork Only** | No video. Blurred album art background. |
 
-Change the mode from the Settings page (`/settings`) or via the API.
+Change the mode from the Settings page (`/settings`)
 
 ---
 
@@ -147,7 +146,6 @@ http://127.0.0.1:5000
 
 ---
 
-## API Endpoints
 
 ### Playback state
 
