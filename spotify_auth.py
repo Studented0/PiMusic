@@ -5,8 +5,8 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
 
-CLIENT_ID = "d5cbeffaa5c1467eb5045d616f6afe29"
-CLIENT_SECRET = "d8b9948c0b5d4b578db1937cbe04c715"
+CLIENT_ID = ""
+CLIENT_SECRET = ""
 REDIRECT_URI = "http://127.0.0.1:8080"
 CACHE_PATH = os.path.expanduser("~/pimusic/.spotify_cache")
 
