@@ -8,11 +8,14 @@ A cinematic music display for Spotify and Apple Music (via Cider), built to run 
 
 ## Screenshots
 
-![Card mode with Canvas in artwork box](screenshots/canvas_card.png)
+![Card mode with Canvas in artwork box]<img width="946" height="965" alt="Screenshot 2026-03-08 032807" src="https://github.com/user-attachments/assets/76271508-90b1-4d4c-8391-4987c300cea9" />
 
-![Canvas Behind Artwork mode](screenshots/canvas_bg.png)
 
-![Cinematic fullscreen mode](screenshots/cinematic.png)
+![Canvas Behind Artwork mode].<img width="939" height="974" alt="Screenshot 2026-03-08 040108" src="https://github.com/user-attachments/assets/e98f7299-f699-494a-8890-7e4b21579528" />
+
+
+![Cinematic fullscreen mode]<img width="1005" height="927" alt="Screenshot 2026-03-12 070609" src="https://github.com/user-attachments/assets/d6a9b810-50e6-4a7c-a87e-24a7d04cb654" />
+
 
 
 ---
@@ -212,9 +215,6 @@ PiMusic/
 ├── templates/
 │   ├── index.html           # Main player page
 │   └── settings.html        # Settings page
-└── canvas-finder/           # Rust helper for Canvas discovery (optional)
-    ├── Cargo.toml
-    └── src/main.rs
 ```
 
 ---
