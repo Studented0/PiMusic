@@ -1,6 +1,6 @@
 # PiMusic
 
-A cinematic music display for Spotify and Apple Music (via Cider), built to run on a Raspberry Pi.
+A raspberry Pi desk display for Spotify and Apple Music. Shows whats playing, lets you skip tracks, and plays Spotify Canvas videos in the background.
 
 **v2.0** | Python + Flask | Vanilla JS
 
@@ -8,17 +8,29 @@ A cinematic music display for Spotify and Apple Music (via Cider), built to run 
 
 ## Screenshots
 
-![Card mode with Canvas in artwork box]<img width="946" height="965" alt="Screenshot 2026-03-08 032807" src="https://github.com/user-attachments/assets/76271508-90b1-4d4c-8391-4987c300cea9" />
+[Card mode with Canvas in artwork box]<img width="946" height="965" alt="Screenshot 2026-03-08 032807" src="https://github.com/user-attachments/assets/76271508-90b1-4d4c-8391-4987c300cea9" />
 
 
-![Canvas Behind Artwork mode].<img width="939" height="974" alt="Screenshot 2026-03-08 040108" src="https://github.com/user-attachments/assets/e98f7299-f699-494a-8890-7e4b21579528" />
+[Canvas Behind Artwork mode].<img width="939" height="974" alt="Screenshot 2026-03-08 040108" src="https://github.com/user-attachments/assets/e98f7299-f699-494a-8890-7e4b21579528" />
 
 
-![Cinematic fullscreen mode]<img width="1005" height="927" alt="Screenshot 2026-03-12 070609" src="https://github.com/user-attachments/assets/d6a9b810-50e6-4a7c-a87e-24a7d04cb654" />
+[Cinematic fullscreen mode]<img width="1005" height="927" alt="Screenshot 2026-03-12 070609" src="https://github.com/user-attachments/assets/d6a9b810-50e6-4a7c-a87e-24a7d04cb654" />
 
 
 
 ---
+
+
+
+## Why I built this
+
+I kept seeing things like carthing and other now-playing displays but they were all missing things, like Apple Music. I use Apple Music almost exclusively, and tabbing out to skip a song is not feasible long-term. The software side took longer than expected, I kind of went in blind and learned as I went. Spotify Canvas has no public API so I had to reverse engineer the GraphQL endpoint and capture tokens with Playwright. There were a lot of bugs. The Apple Music side was cleaner since Cider exposes a local API, but Apple Music side only works with Cider currently.
+
+---
+
+## Current Status
+
+Software is complete and working. Case is designed, BOM is finalized, and Hardware is ready to assemble. Will likely need to tweak and optimize preformance for a Pi.
 
 ## Features
 
@@ -26,12 +38,11 @@ A cinematic music display for Spotify and Apple Music (via Cider), built to run 
 - **Spotify Canvas** — Animated background videos from Spotify, including cross-source lookup for Apple Music tracks
 - **Three visual modes** — Canvas in artwork box, canvas fullscreen behind card, or album artwork only
 - **Cinematic mode** — Click album art to enter fullscreen; click anywhere to exit
-- **Predictive progress bar** — Local timer with smooth drift correction, no jitter
+- **Predictive progress bar** — Local timer with smooth drift correction
 - **Optimistic controls** — Play/pause/skip update the UI instantly, before the API responds
-- **Scrobble logging** — Timer-based scrobbler shared across both sources, logs to `~/pimusic/scrobbles.log`
+- **Scrobble logging** — Timer-based scrobbler shared across both sources
 - **Settings page** — Web UI to configure credentials, visual mode, CPU threshold, and more
 - **Pi-safe** — CPU monitoring with automatic video disable when usage exceeds threshold
-- **ESP32 HID support** — HTTP endpoint for external hardware controls
 
 ---
 
@@ -40,7 +51,7 @@ A cinematic music display for Spotify and Apple Music (via Cider), built to run 
 | Mode | Description |
 |------|-------------|
 | **Canvas in Artwork Box** | Canvas video plays inside the album art square. Click art to go fullscreen. |
-| **Canvas Behind Artwork** | Canvas video fills the screen behind the centered card UI. |
+| **Canvas Behind Artwork** | Canvas video fills the screen behind the centered Artwork UI. |
 | **Album Artwork Only** | No video. Blurred album art background. |
 
 Change the mode from the Settings page (`/settings`)
@@ -66,12 +77,28 @@ Change the mode from the Settings page (`/settings`)
 - **Python 3.10+**
 - **Spotify Premium** account
 - **Spotify Developer App** — Create one at [developer.spotify.com](https://developer.spotify.com/dashboard) to get a Client ID, Client Secret, and Redirect URI
-- **SP_DC cookie** — Extract from your browser's Spotify cookies (needed for Canvas)
+- **SP_DC cookie** — Extract from your browser's Spotify cookies (needed for Canvas) 
 - **Chromium** — Installed automatically by Playwright on first run
-- **Cider** (optional) — [cider.sh](https://cider.sh) for Apple Music support
+- **Cider**  — [cider.sh](https://cider.sh) for Apple Music support
 
 ---
 
+## Hardware 
+
+ - Raspberry Pi 3B+
+ - HyperPixel 4.0 Touch
+ - Micro USB PSU 5.1V 2.5A (For Pi)
+ - microSD card (32gb but anything at or above 16 works)
+
+---
+
+## Wiring 
+The HyperPixel 4.0 connects directly to the Pi's 40-pin GPIO. No additional wiring needed.
+
+---
+
+## Case
+Case for the Pi and display with a 17° wedge stand. Prints as one piece, no supports needed.
 ## Installation
 
 ```bash
@@ -120,19 +147,6 @@ Settings are persisted to `~/pimusic/settings.json`.
 
 ---
 
-## Usage
-
-Start the server:
-
-```bash
-python spotify_server.py
-```
-
-Open in your browser:
-
-```
-http://127.0.0.1:5000
-```
 
 ### Controls
 
@@ -207,7 +221,7 @@ PiMusic/
 ├── resource_monitor.py      # CPU monitoring, video disable threshold
 ├── album_cache.py           # Album art download, dominant color extraction
 ├── requirements.txt         # Python dependencies
-├── .env                     # Environment variables (not tracked)
+├── .env                     # Environment variables 
 ├── static/
 │   ├── app.js               # Frontend: polling, rendering, controls, cinematic toggle
 │   ├── style.css            # All visual styling and layout modes
@@ -217,22 +231,7 @@ PiMusic/
 │   └── settings.html        # Settings page
 ```
 
----
 
-## Raspberry Pi Notes
-
-PiMusic is designed to run on a **Raspberry Pi 3 B+** or better.
-
-- **CPU threshold** — Set via Settings. When CPU usage exceeds the threshold, Canvas video is automatically disabled and the UI falls back to album artwork. Default is 75%.
-- **Video decoding** — All video rendering happens in the browser. Python only provides the Canvas URL.
-- **Canvas proxy** — Canvas MP4s are streamed through RAM, never written to disk, to protect SD card / SSD health.
-- **Recommended browser** — Chromium in kiosk mode for the best fullscreen experience.
-
-### Kiosk mode example
-
-```bash
-chromium-browser --kiosk --noerrdialogs --disable-infobars http://127.0.0.1:5000
-```
 
 ---
 
