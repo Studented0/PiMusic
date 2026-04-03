@@ -221,7 +221,9 @@ PiMusic/
 ├── resource_monitor.py      # CPU monitoring, video disable threshold
 ├── album_cache.py           # Album art download, dominant color extraction
 ├── requirements.txt         # Python dependencies
-├── .env                     # Environment variables 
+├── BOM.csv                  # Bill of materials with links
+├── .env                     # Environment variables (not tracked)
+├── .gitattributes
 ├── static/
 │   ├── app.js               # Frontend: polling, rendering, controls, cinematic toggle
 │   ├── style.css            # All visual styling and layout modes
@@ -229,6 +231,9 @@ PiMusic/
 ├── templates/
 │   ├── index.html           # Main player page
 │   └── settings.html        # Settings page
+├── canvas-finder/           # Canvas URL lookup tooling
+├── cad/                     # SolidWorks files, STEP
+└── renders/                 # Assembly renders
 ```
 
 
