@@ -78,26 +78,8 @@ The search uses a three-tier fallback pipeline:
 
 Before searching, track names are normalized — stripping `(feat. ...)`, `(ft. ...)`, `(with ...)`, `(... version)`, and `(... remix)` suffixes that often differ between Apple Music and Spotify metadata.
 
-### Caching and Performance
 
-- Results are cached in memory, keyed by track + artist, with a 6-hour TTL
-- Both positive matches and "no match" results are cached to prevent redundant API calls
-- Only one search runs per track at a time (duplicate lookups are deduplicated)
-- Canvas MP4 bytes are streamed through Flask from RAM — never written to disk
 
-### Visual Fallback Chain
-
-```
-Spotify track ──> Spotify Canvas (native)
-                      │
-                      ▼ (no canvas)
-                  Album artwork
-
-Apple Music track ──> Spotify search ──> Spotify Canvas (cross-lookup)
-                                             │
-                                             ▼ (no match)
-                                         Album artwork
-```
 
 ---
 
@@ -179,7 +161,7 @@ On first run, Spotipy will open a browser for OAuth authorization. Paste the red
 | `SPOTIPY_CLIENT_ID` | Yes | Spotify app Client ID |
 | `SPOTIPY_CLIENT_SECRET` | Yes | Spotify app Client Secret |
 | `SPOTIPY_REDIRECT_URI` | Yes | OAuth redirect URI (default `http://127.0.0.1:8080`) |
-| `SP_DC` | Yes | Spotify `sp_dc` cookie for Canvas/web player token |
+| `SP_DC` | No(only for canvas) | Spotify `sp_dc` cookie for Canvas/web player token |
 
 ### Settings page
 
