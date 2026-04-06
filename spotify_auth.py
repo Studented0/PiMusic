@@ -1,13 +1,18 @@
 import os
 import time
 import threading
+
+import dotenv
+dotenv.load_dotenv()
+
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.cache_handler import CacheFileHandler
 
-CLIENT_ID = ""
-CLIENT_SECRET = ""
-REDIRECT_URI = "http://127.0.0.1:8080"
+CLIENT_ID = os.environ.get("SPOTIPY_CLIENT_ID", "")
+CLIENT_SECRET = os.environ.get("SPOTIPY_CLIENT_SECRET", "")
+REDIRECT_URI = os.environ.get("SPOTIPY_REDIRECT_URI", "http://127.0.0.1:8080")
+SP_DC = os.environ.get("SP_DC", "")
 CACHE_PATH = os.path.expanduser("~/pimusic/.spotify_cache")
 
 SCOPES = (
@@ -16,20 +21,6 @@ SCOPES = (
     "user-modify-playback-state "
     "user-read-email"
 )
-
-def _load_sp_dc() -> str:
-    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
-    if os.path.isfile(env_path):
-        with open(env_path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line.startswith("SP_DC=") and not line.startswith("#"):
-                    val = line.split("=", 1)[1].strip().strip('"').strip("'")
-                    if val and val != "your_sp_dc_cookie_value_here":
-                        return val
-    return os.environ.get("SP_DC", "")
-
-SP_DC = _load_sp_dc()
 
 # ── Web player token (for Canvas GraphQL) ────────────────
 _wp_bearer = ""

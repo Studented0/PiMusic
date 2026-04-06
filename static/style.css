@@ -170,8 +170,8 @@ html,body {
   overflow: hidden;
   box-shadow: 0 24px 64px rgba(0,0,0,.5);
   flex-shrink: 0;
-  transition: box-shadow var(--transition);
   cursor: pointer;
+  isolation: isolate;
 }
 .album-art {
   width: 100%; height: 100%;
@@ -189,13 +189,7 @@ html,body {
   transition: opacity .8s ease;
   z-index: 3;
   pointer-events: none;
-  border-radius: var(--radius);
   background: transparent;
-  image-rendering: -webkit-optimize-contrast;
-  transform: translateZ(0);
-  -webkit-transform: translateZ(0);
-  filter: contrast(1.15) saturate(1.25) brightness(1.05);
-  -webkit-filter: contrast(1.15) saturate(1.25) brightness(1.05);
 }
 .canvas-video.active { opacity: 1; }
 

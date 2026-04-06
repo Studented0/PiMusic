@@ -11,8 +11,8 @@ from flask import Flask, Response, jsonify, render_template, request, send_from_
 import requests as http_requests
 
 from spotify_auth import (
-    get_spotify_client, SP_DC, start_wp_token_refresh, force_reauth,
-    get_account_info,
+    get_spotify_client, SP_DC, CLIENT_ID, REDIRECT_URI,
+    start_wp_token_refresh, force_reauth, get_account_info,
 )
 from spotify_controller import (
     force_poll,
@@ -38,9 +38,9 @@ sp = get_spotify_client()
 
 _default_settings = {
     "spotify_sp_dc": SP_DC,
-    "spotify_client_id": "",
+    "spotify_client_id": CLIENT_ID,
     "spotify_client_secret": "",
-    "spotify_redirect_uri": "http://127.0.0.1:8080",
+    "spotify_redirect_uri": REDIRECT_URI,
     "cider_token": "",
     "cider_host": "http://127.0.0.1:10767",
     "cider_storefront": "us",

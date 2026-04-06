@@ -58,6 +58,49 @@ Change the mode from the Settings page (`/settings`)
 
 ---
 
+## How Canvas Works
+
+Spotify Canvas is a short looping video that Spotify attaches to select tracks. PiMusic uses Canvas as its universal visual system across both Spotify and Apple Music.
+
+### Native Spotify Tracks
+
+When playing from Spotify, Canvas is fetched directly via Spotify's internal GraphQL Pathfinder API. Authentication uses an `sp_dc` cookie token, automatically captured and refreshed by Playwright in the background.
+
+### Cross-Source Lookup for Apple Music
+
+When playing from Apple Music via Cider, PiMusic searches Spotify for the same track and displays its Canvas. This means Apple Music tracks get animated backgrounds too — the key differentiator of PiMusic.
+
+The search uses a three-tier fallback pipeline:
+
+1. **Track + Artist** — `track:{name} artist:{artist}` (best match)
+2. **Track only** — `track:{name}` (handles artist name differences)
+3. **Artist only** — `artist:{artist}` (last resort, still gets a Canvas from the same artist)
+
+Before searching, track names are normalized — stripping `(feat. ...)`, `(ft. ...)`, `(with ...)`, `(... version)`, and `(... remix)` suffixes that often differ between Apple Music and Spotify metadata.
+
+### Caching and Performance
+
+- Results are cached in memory, keyed by track + artist, with a 6-hour TTL
+- Both positive matches and "no match" results are cached to prevent redundant API calls
+- Only one search runs per track at a time (duplicate lookups are deduplicated)
+- Canvas MP4 bytes are streamed through Flask from RAM — never written to disk
+
+### Visual Fallback Chain
+
+```
+Spotify track ──> Spotify Canvas (native)
+                      │
+                      ▼ (no canvas)
+                  Album artwork
+
+Apple Music track ──> Spotify search ──> Spotify Canvas (cross-lookup)
+                                             │
+                                             ▼ (no match)
+                                         Album artwork
+```
+
+---
+
 ## Tech Stack
 
 | Component | Technology |
@@ -108,7 +151,13 @@ pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-Create a `.env` file in the project root:
+Copy the example environment file and fill in your credentials:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env` with your values:
 
 ```env
 SPOTIPY_CLIENT_ID=your_client_id
