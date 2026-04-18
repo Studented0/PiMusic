@@ -19,6 +19,8 @@ from spotify_auth import (
 from spotify_controller import (
     force_poll,
     get_canvas_cdn_url,
+    get_idle_canvas,
+    prewarm_idle_canvas,
     start_polling,
 )
 from album_cache import prune_art_cache
@@ -117,6 +119,17 @@ def api_state():
             data["canvas_url"] = None
 
     data["visual_mode"] = vm
+
+    idle_tid, idle_cdn = get_idle_canvas()
+    if idle_tid and idle_cdn:
+        data["idle_canvas_track_id"] = idle_tid
+        data["idle_canvas_url"] = f"/api/canvas/{idle_tid}.mp4"
+        data["idle_canvas_cdn_url"] = idle_cdn
+    else:
+        data["idle_canvas_track_id"] = None
+        data["idle_canvas_url"] = None
+        data["idle_canvas_cdn_url"] = None
+
     return jsonify(data)
 
 
@@ -415,6 +428,9 @@ if __name__ == "__main__":
 
     print("Starting Spotify poller ...")
     start_polling(sp)
+
+    print("Pre-warming idle screensaver canvas...")
+    prewarm_idle_canvas()
 
     try:
         account = get_account_info()

@@ -38,6 +38,7 @@ Software is complete and working on a Pi 3B+ with the HyperPixel 4.0 display. Ca
 - **Spotify Canvas** — Animated background videos from Spotify, including cross-source lookup for Apple Music tracks
 - **Three visual modes** — Canvas in artwork box, canvas fullscreen behind card, or album artwork only
 - **Cinematic mode** — Click album art to enter fullscreen; sticks across tracks so it doesn't bail out between songs
+- **Idle canvas screensaver** — When nothing's playing, a pre-picked Spotify Canvas (Stick Talk by Future, by default) takes over the background so the display never feels dead
 - **Rotary encoder control** — Pro Micro + E11 encoder handles volume, play/pause, skip, previous, and opening settings, all without touching the screen
 - **Predictive progress bar** — Local clock with discrete resyncs on pause/seek/skip (no more choppy drift correction)
 - **Optimistic controls** — Play/pause/skip update the UI instantly, before the API responds
@@ -79,8 +80,22 @@ The search uses a three-tier fallback pipeline:
 
 Before searching, track names are normalized — stripping `(feat. ...)`, `(ft. ...)`, `(with ...)`, `(... version)`, and `(... remix)` suffixes that often differ between Apple Music and Spotify metadata.
 
+### Idle Canvas Screensaver
 
+When there's no active track (Spotify fully closed or nothing playing on Cider), the display isn't left blank — a pre-picked Canvas video takes over as a screensaver. The idle UI ("No music playing" + dimmed artwork frame) stays visible on top, and the display auto-enters cinematic mode so the video is fullscreen.
 
+By default the screensaver uses the Canvas for **Stick Talk by Future**. To change it or add more to rotate through, edit this list at the top of `spotify_controller.py`:
+
+```python
+IDLE_CANVAS_TRACK_IDS = [
+    "20fAoPjfYltmd3K3bO7gbt",  # Stick Talk - Future
+    # Add more track IDs here to rotate through them later
+]
+```
+
+To get a track's Spotify ID, open the track in Spotify → right-click → Share → Copy Song Link. The ID is the 22-character string after `/track/` in the URL (before the `?si=...` part).
+
+The server pre-fetches all listed canvases on startup, so they're ready the instant the screensaver kicks in. Only tracks that actually have a Canvas will work — if a track has no Canvas, Spotify returns nothing and PiMusic will skip it. Right now PiMusic uses the first available entry; when you add more, rotation between them can be added later without touching the web UI.
 
 ---
 
@@ -353,6 +368,7 @@ PiMusic/
 
 A pile of reliability work on top of v2.0:
 
+- **Idle canvas screensaver** — When nothing is playing, the display shows a pre-picked Canvas video fullscreen instead of sitting on a dead "No music playing" screen. Configurable list of track IDs, pre-fetched on startup.
 - **Rotary encoder support** — Pro Micro firmware and web-side keydown handling for volume, play/pause, next, previous, and opening settings. Settings page is fully navigable with just the encoder.
 - **Canvas reliability** — Bounded per-track URL cache, deduplicated in-flight CDN downloads, token refresh on both 401 and 403, and Chrome TLS impersonation via `curl_cffi` for the CDN fetch (Spotify's CDN fingerprints clients).
 - **Album art race fixes** — Art caching moved off the poll thread, atomic file writes, client-side token guard so a slow image load can't overwrite newer state, and an on-disk quota that prunes to 200 MB.

@@ -93,6 +93,7 @@
   var canvasMode = false;
   var visualMode = "canvas_card";
   var artworkWrap = $("#artwork-wrap");
+  var idleScreensaverActive = false;
 
   var barWidth = dom.bar.offsetWidth;
   if (window.ResizeObserver) {
@@ -540,6 +541,24 @@
         if (data.visual_mode) visualMode = data.visual_mode;
         if (canvasMode && visualMode === "canvas_bg") {
           exitCinematic();
+        }
+
+        /* Idle screensaver: no active track + we have an idle canvas cached */
+        var isIdle = !data.track_id;
+        var wasIdle = idleScreensaverActive;
+        idleScreensaverActive = isIdle && !!data.idle_canvas_url;
+
+        if (idleScreensaverActive) {
+          incomingCanvas = data.idle_canvas_url;
+          incomingCdn    = data.idle_canvas_cdn_url || null;
+          incomingVisual = "canvas_video";
+        }
+
+        if (idleScreensaverActive && !wasIdle) {
+          document.body.classList.add("idle-screensaver");
+          if (!canvasMode && visualMode !== "canvas_bg") enterCinematic();
+        } else if (!idleScreensaverActive && wasIdle) {
+          document.body.classList.remove("idle-screensaver");
         }
 
         var playingTransition = data.is_playing !== undefined

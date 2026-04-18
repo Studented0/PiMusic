@@ -64,6 +64,14 @@ _force_poll_timer_lock = threading.Lock()
 CANVAS_HASH = "575138ab27cd5c1b3e54da54d0a7cc8d85485402de26340c2145f0f6bb5e7a9f"
 PATHFINDER_URL = "https://api-partner.spotify.com/pathfinder/v2/query"
 
+# Idle screensaver canvases — played as the background when no music is active.
+# Add more track IDs here to rotate through them later.
+IDLE_CANVAS_TRACK_IDS = [
+    "20fAoPjfYltmd3K3bO7gbt",  # Stick Talk - Future
+]
+_idle_prewarm_lock = threading.Lock()
+_idle_prewarm_in_progress = False
+
 
 def _check_rate_limited():
     """True if we should not make any Spotify API calls."""
@@ -208,6 +216,51 @@ def get_canvas_cdn_url(track_id):
     """Return the raw CDN URL for a track's canvas, or None."""
     with _canvas_lock:
         return _canvas_cache.get(track_id)
+
+
+def prewarm_idle_canvas():
+    """Pre-fetch idle screensaver canvas(es) so they're ready when needed.
+    Safe to call repeatedly; debounced internally."""
+    global _idle_prewarm_in_progress
+    with _idle_prewarm_lock:
+        if _idle_prewarm_in_progress:
+            return
+        _idle_prewarm_in_progress = True
+
+    def _work():
+        global _idle_prewarm_in_progress
+        try:
+            # Give token capture a chance to settle before first fetch.
+            time.sleep(8)
+            for tid in IDLE_CANVAS_TRACK_IDS:
+                if not tid:
+                    continue
+                with _canvas_lock:
+                    already = tid in _canvas_cache
+                if already:
+                    continue
+                _fetch_canvas_graphql(tid)
+                time.sleep(3)
+        finally:
+            with _idle_prewarm_lock:
+                _idle_prewarm_in_progress = False
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
+def get_idle_canvas():
+    """Return (track_id, cdn_url) for the idle screensaver canvas, or (None, None).
+    Currently returns the first cached entry; later we can rotate. If nothing is
+    cached, kicks off a prewarm so it'll be available on a subsequent call."""
+    for tid in IDLE_CANVAS_TRACK_IDS:
+        if not tid:
+            continue
+        with _canvas_lock:
+            cdn = _canvas_cache.get(tid)
+        if cdn:
+            return tid, cdn
+    prewarm_idle_canvas()
+    return None, None
 
 
 def _grab_device(sp):
