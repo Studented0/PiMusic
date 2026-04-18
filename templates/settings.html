@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>PiMusic — Settings</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=43">
 </head>
 <body class="settings-body">
   <div class="settings-page">
@@ -78,14 +78,27 @@
     <!-- Display -->
     <section class="settings-section">
       <h2>Display</h2>
-      <label class="settings-label">
-        Visual Mode
-        <select id="visual_mode" class="settings-input">
-          <option value="canvas_card">Canvas in Artwork Box</option>
-          <option value="canvas_bg">Canvas Behind Artwork</option>
-          <option value="artwork">Album Artwork Only</option>
-        </select>
-      </label>
+      <div class="settings-label">Visual Mode</div>
+      <div id="visual_mode" class="visual-mode-tiles" role="radiogroup" aria-label="Visual Mode">
+        <button type="button" class="vm-tile" data-value="canvas_card" role="radio" aria-checked="false">
+          <span class="vm-tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="5" width="16" height="14" rx="2"/><polygon points="10 9 15 12 10 15" fill="currentColor" stroke="none"/></svg>
+          </span>
+          <span class="vm-tile-label">Canvas<br>in Box</span>
+        </button>
+        <button type="button" class="vm-tile" data-value="canvas_bg" role="radio" aria-checked="false">
+          <span class="vm-tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><rect x="8" y="9" width="8" height="6" rx="1" fill="currentColor" stroke="none"/></svg>
+          </span>
+          <span class="vm-tile-label">Canvas<br>Background</span>
+        </button>
+        <button type="button" class="vm-tile" data-value="artwork" role="radio" aria-checked="false">
+          <span class="vm-tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="10" r="1.5" fill="currentColor" stroke="none"/><path d="M4 17l5-5 4 4 3-3 4 4"/></svg>
+          </span>
+          <span class="vm-tile-label">Artwork<br>Only</span>
+        </button>
+      </div>
       <label class="settings-label">
         CPU Threshold (%)
         <div class="settings-range-wrap">
@@ -124,6 +137,6 @@
     </div>
   </div>
 
-  <script src="/static/settings.js"></script>
+  <script src="/static/settings.js?v=43"></script>
 </body>
 </html>

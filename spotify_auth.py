@@ -99,10 +99,11 @@ def get_web_player_tokens() -> tuple[str, str]:
         expired = not _wp_bearer or (time.time() - _wp_token_ts) >= WP_TOKEN_TTL
         if not expired:
             return _wp_bearer, _wp_client_token
-        if not _wp_refreshing and SP_DC:
-            _wp_refreshing = True
-            t = threading.Thread(target=_bg_refresh, daemon=True)
-            t.start()
+        if not SP_DC or _wp_refreshing:
+            return _wp_bearer, _wp_client_token
+        _wp_refreshing = True
+    threading.Thread(target=_bg_refresh, daemon=True).start()
+    with _wp_lock:
         return _wp_bearer, _wp_client_token
 
 
@@ -116,11 +117,17 @@ def _bg_refresh():
 
 
 def start_wp_token_refresh():
-    """Kick off initial token capture in a background thread."""
+    """Kick off initial token capture in a background thread.
+    Coalesces with get_web_player_tokens so bursts of 401s do not spawn
+    multiple concurrent Playwright Chromium instances."""
+    global _wp_refreshing
     if not SP_DC:
         return
-    t = threading.Thread(target=_bg_refresh, daemon=True)
-    t.start()
+    with _wp_lock:
+        if _wp_refreshing:
+            return
+        _wp_refreshing = True
+    threading.Thread(target=_bg_refresh, daemon=True).start()
 
 
 # ── Standard Spotify OAuth (for playback control) ────────

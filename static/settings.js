@@ -1,7 +1,38 @@
 (function () {
   "use strict";
 
-  var $ = function (s) { return document.querySelector(s); };
+  console.log("[PiMusic] settings.js v2 loaded");
+
+  var $  = function (s) { return document.querySelector(s); };
+  var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
+
+  /* ── Visual-mode tile group shim (acts like <select>) ── */
+  var visualModeGroup = (function () {
+    var root = $("#visual_mode");
+    var tiles = $$("#visual_mode .vm-tile");
+    var current = "canvas_card";
+
+    function setValue(v) {
+      if (v !== "canvas_card" && v !== "canvas_bg" && v !== "artwork") v = "canvas_card";
+      current = v;
+      tiles.forEach(function (t) {
+        var active = t.getAttribute("data-value") === v;
+        t.classList.toggle("vm-tile--active", active);
+        t.setAttribute("aria-checked", active ? "true" : "false");
+      });
+    }
+
+    tiles.forEach(function (t) {
+      t.addEventListener("click", function () { setValue(t.getAttribute("data-value")); });
+    });
+
+    return {
+      el: root,
+      tiles: tiles,
+      get value() { return current; },
+      set value(v) { setValue(v); }
+    };
+  })();
 
   var fields = {
     spotify_sp_dc:        $("#spotify_sp_dc"),
@@ -14,7 +45,7 @@
     cpu_threshold:        $("#cpu_threshold"),
     scanline_overlay:     $("#scanline_overlay"),
     cinematic_auto:       $("#cinematic_auto"),
-    visual_mode:          $("#visual_mode")
+    visual_mode:          visualModeGroup
   };
 
   var statusBar = $("#status-bar");
@@ -120,6 +151,23 @@
       .catch(function () { showStatus("Re-auth failed", true); });
   });
 
+  /* Clear album art cache on disk */
+  var btnClearCache = $("#btn-clear-cache");
+  if (btnClearCache) {
+    btnClearCache.addEventListener("click", function () {
+      fetch("/api/clear-cache", { method: "POST" })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (d.ok) {
+            showStatus("Art cache cleared (" + (d.removed || 0) + " file(s))");
+          } else {
+            showStatus(d.error || "Clear failed", true);
+          }
+        })
+        .catch(function () { showStatus("Clear failed", true); });
+    });
+  }
+
   /* Test Spotify */
   $("#btn-test-spotify").addEventListener("click", function () {
     fetch("/api/state")
@@ -159,6 +207,145 @@
       body: JSON.stringify({ source: "cider" })
     }).then(function () { pollSource(); showStatus("Switched to Apple Music"); });
   });
+
+  /* ── Encoder / keyboard navigation ─────────────────── */
+
+  var navList        = [];
+  var navIndex       = 0;
+  var adjustMode     = false;
+  var SLIDER_STEP    = 5;
+  var NAV_DETENT_MS  = 110;
+  var MULTI_PRESS_MS = 350;
+  var lastNavTs      = 0;
+  var pressCount     = 0;
+  var pressTimer     = null;
+
+  function buildNavList() {
+    navList = $$(".settings-page .vm-tile, "
+                + ".settings-page .settings-btn, "
+                + ".settings-page input[type=checkbox], "
+                + ".settings-page input[type=range]");
+  }
+
+  function clearFocusRing() {
+    navList.forEach(function (el) {
+      el.classList.remove("kbd-focus");
+      el.classList.remove("kbd-focus--adjust");
+    });
+  }
+
+  function applyFocusRing() {
+    clearFocusRing();
+    var el = navList[navIndex];
+    if (!el) return;
+    el.classList.add("kbd-focus");
+    if (adjustMode) el.classList.add("kbd-focus--adjust");
+    try { el.focus({ preventScroll: true }); } catch (_) { el.focus(); }
+    try { el.scrollIntoView({ block: "center", behavior: "smooth" }); } catch (_) {}
+  }
+
+  function moveNav(delta) {
+    if (!navList.length) return;
+    navIndex = (navIndex + delta + navList.length) % navList.length;
+    applyFocusRing();
+  }
+
+  function activateCurrent() {
+    var el = navList[navIndex];
+    if (!el) return;
+    var tag = el.tagName.toLowerCase();
+    var type = (el.getAttribute("type") || "").toLowerCase();
+
+    if (el.classList.contains("vm-tile")) {
+      el.click();
+      return;
+    }
+    if (tag === "input" && type === "checkbox") {
+      el.checked = !el.checked;
+      el.dispatchEvent(new Event("change", { bubbles: true }));
+      return;
+    }
+    if (tag === "input" && type === "range") {
+      adjustMode = !adjustMode;
+      applyFocusRing();
+      return;
+    }
+    if (tag === "button") {
+      el.click();
+      return;
+    }
+  }
+
+  function adjustSlider(delta) {
+    var el = navList[navIndex];
+    if (!el || el.tagName.toLowerCase() !== "input" || el.type !== "range") return;
+    var min  = parseFloat(el.min || "0");
+    var max  = parseFloat(el.max || "100");
+    var step = parseFloat(el.step || "1") || 1;
+    var amt  = Math.max(step, SLIDER_STEP);
+    var v    = parseFloat(el.value) + delta * amt;
+    if (v < min) v = min;
+    if (v > max) v = max;
+    el.value = String(v);
+    el.dispatchEvent(new Event("input",  { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  function encoderButton() {
+    pressCount++;
+    clearTimeout(pressTimer);
+    pressTimer = setTimeout(function () {
+      var n = pressCount;
+      pressCount = 0;
+      if (n >= 3) {
+        window.location.href = "/";
+      } else if (n === 2) {
+        var saveBtn = document.getElementById("btn-save");
+        if (saveBtn) saveBtn.click();
+      } else {
+        activateCurrent();
+      }
+    }, MULTI_PRESS_MS);
+  }
+
+  window.addEventListener("keydown", function (e) {
+    if (e.repeat) return;
+
+    /* Never hijack typing in text/password inputs */
+    var ae = document.activeElement;
+    if (ae && ae.tagName && ae.tagName.toLowerCase() === "input") {
+      var t = (ae.getAttribute("type") || "").toLowerCase();
+      if (t === "text" || t === "password" || t === "email" || t === "number" || t === "url") {
+        return;
+      }
+    }
+
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      /* Coalesce multi-pulse encoder detents into one nav step */
+      var now = performance.now();
+      if (now - lastNavTs < NAV_DETENT_MS) return;
+      lastNavTs = now;
+
+      if (e.key === "ArrowDown") {
+        if (adjustMode) adjustSlider(-1);
+        else            moveNav(+1);
+      } else {
+        if (adjustMode) adjustSlider(+1);
+        else            moveNav(-1);
+      }
+    } else if (e.key === " " || e.key === "Enter") {
+      e.preventDefault();
+      encoderButton();
+    } else if (e.key === "Escape" && adjustMode) {
+      adjustMode = false;
+      applyFocusRing();
+    }
+  });
+
+  /* Rebuild once tiles / buttons exist */
+  buildNavList();
+  applyFocusRing();
 
   /* Boot */
   loadSettings();

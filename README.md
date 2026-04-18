@@ -1,8 +1,8 @@
 # PiMusic
 
-A raspberry Pi desk display for Spotify and Apple Music. Shows whats playing, lets you skip tracks, and plays Spotify Canvas videos in the background.
+A Raspberry Pi desk display for Spotify and Apple Music. Shows what's playing, lets you skip tracks, and plays Spotify Canvas videos in the background. Ships with a rotary encoder for physical volume and playback control.
 
-**v2.0** | Python + Flask | Vanilla JS
+**v2.1** | Python + Flask | Vanilla JS
 
 ---
 
@@ -24,24 +24,25 @@ A raspberry Pi desk display for Spotify and Apple Music. Shows whats playing, le
 
 ## Why I built this
 
-I kept seeing things like carthing and other now-playing displays but they were all missing things, like Apple Music. I use Apple Music almost exclusively, and tabbing out to skip a song is not feasible long-term. The software side took longer than expected, I kind of went in blind and learned as I went. Spotify Canvas has no public API so I had to reverse engineer the GraphQL endpoint and capture tokens with Playwright. There were a lot of bugs. The Apple Music side was cleaner since Cider exposes a local API, but Apple Music side only works with Cider currently.
+I kept seeing things like Car Thing and other now-playing displays but they were all missing things, like Apple Music. I use Apple Music almost exclusively, and tabbing out to skip a song is not feasible long-term. The software side took longer than expected, I kind of went in blind and learned as I went. Spotify Canvas has no public API so I had to reverse engineer the GraphQL endpoint and capture tokens with Playwright. There were a lot of bugs. The Apple Music side was cleaner since Cider exposes a local API, but Apple Music side only works with Cider currently.
 
 ---
 
 ## Current Status
 
-Software is complete and working. Case is designed, BOM is finalized, and Hardware is ready to assemble. Will likely need to tweak and optimize preformance for a Pi.
+Software is complete and working on a Pi 3B+ with the HyperPixel 4.0 display. Case is designed, BOM is finalized, and hardware is ready to assemble. The rotary encoder firmware is done and tested with a SparkFun Pro Micro.
 
 ## Features
 
 - **Dual-source playback** — Spotify and Apple Music (Cider) with automatic source detection and manual switching
 - **Spotify Canvas** — Animated background videos from Spotify, including cross-source lookup for Apple Music tracks
 - **Three visual modes** — Canvas in artwork box, canvas fullscreen behind card, or album artwork only
-- **Cinematic mode** — Click album art to enter fullscreen; click anywhere to exit
-- **Predictive progress bar** — Local timer with smooth drift correction
+- **Cinematic mode** — Click album art to enter fullscreen; sticks across tracks so it doesn't bail out between songs
+- **Rotary encoder control** — Pro Micro + E11 encoder handles volume, play/pause, skip, previous, and opening settings, all without touching the screen
+- **Predictive progress bar** — Local clock with discrete resyncs on pause/seek/skip (no more choppy drift correction)
 - **Optimistic controls** — Play/pause/skip update the UI instantly, before the API responds
 - **Scrobble logging** — Timer-based scrobbler shared across both sources
-- **Settings page** — Web UI to configure credentials, visual mode, CPU threshold, and more
+- **Settings page** — Web UI to configure credentials, visual mode, CPU threshold, and more. Fully navigable with just the encoder.
 - **Pi-safe** — CPU monitoring with automatic video disable when usage exceeds threshold
 
 ---
@@ -83,6 +84,44 @@ Before searching, track names are normalized — stripping `(feat. ...)`, `(ft. 
 
 ---
 
+## Rotary Encoder
+
+The encoder is an E11 rotary with a push button, wired to a SparkFun Pro Micro (ATmega32U4). The Pro Micro shows up as a USB keyboard, so the Pi kiosk just sees arrow keys and spacebar presses. No driver, no serial protocol, no extra endpoint — the web app listens for keydown events directly.
+
+### Wiring
+
+| Encoder pin | Pro Micro pin |
+|-------------|---------------|
+| A           | 2             |
+| B           | 3             |
+| Button      | 4             |
+| Common / GND | GND          |
+
+All three inputs use internal pull-ups, so no external resistors needed.
+
+### Firmware
+
+Sketch lives at `firmware/pimusic_encoder/pimusic_encoder.ino`. Flash it from the Arduino IDE with the board set to **SparkFun Pro Micro** (or Arduino Leonardo). It sends:
+
+- CW rotation → `KEY_DOWN_ARROW` (volume down)
+- CCW rotation → `KEY_UP_ARROW` (volume up)
+- Button → `Space` (multi-press detection on the web side)
+
+### Encoder actions in the web UI
+
+| Action | How |
+|--------|-----|
+| Volume down | Turn CW (step of 2) |
+| Volume up | Turn CCW (step of 2) |
+| Play / pause | Single press |
+| Next track | Double press |
+| Previous / restart | Triple press |
+| Open settings | 4+ presses |
+
+On the settings page, the encoder also works as navigation — turn to move between options, press to activate, and turn again inside a slider to adjust the value. Volume changes are debounced 450 ms so rapid spins don't hit the Spotify rate limit.
+
+---
+
 ## Tech Stack
 
 | Component | Technology |
@@ -90,10 +129,11 @@ Before searching, track names are normalized — stripping `(feat. ...)`, `(ft. 
 | Server | Python 3, Flask |
 | Spotify API | Spotipy, Playwright (token capture) |
 | Apple Music | Cider local API |
-| Canvas fetch | GraphQL via curl_cffi |
+| Canvas fetch | GraphQL via curl_cffi (Chrome TLS impersonation) |
 | Frontend | Vanilla JS, CSS, HTML |
 | Scrobbler | Monotonic timer with 2s drift threshold |
 | Monitoring | psutil for CPU usage |
+| Encoder firmware | Arduino C++ on Pro Micro (ATmega32U4) |
 
 ---
 
@@ -102,28 +142,37 @@ Before searching, track names are normalized — stripping `(feat. ...)`, `(ft. 
 - **Python 3.10+**
 - **Spotify Premium** account
 - **Spotify Developer App** — Create one at [developer.spotify.com](https://developer.spotify.com/dashboard) to get a Client ID, Client Secret, and Redirect URI
-- **SP_DC cookie** — Extract from your browser's Spotify cookies (needed for Canvas) 
+- **SP_DC cookie** — Extract from your browser's Spotify cookies (needed for Canvas)
 - **Chromium** — Installed automatically by Playwright on first run
-- **Cider**  — [cider.sh](https://cider.sh) for Apple Music support
+- **Cider** — [cider.sh](https://cider.sh) for Apple Music support
+- **Arduino IDE** (optional) — Only if you want to flash the encoder firmware
 
 ---
 
-## Hardware 
+## Hardware
 
- - Raspberry Pi 3B+
- - HyperPixel 4.0 Touch
- - Micro USB PSU 5.1V 2.5A (For Pi)
- - microSD card (32gb but anything at or above 16 works)
+- Raspberry Pi 3B+
+- HyperPixel 4.0 Touch
+- Micro USB PSU 5.1V 2.5A (for Pi)
+- microSD card (32gb but anything at or above 16 works)
+- SparkFun Pro Micro (ATmega32U4)
+- E11 rotary encoder with push button
+- Micro USB cable (Pro Micro → Pi)
 
 ---
 
-## Wiring 
+## Wiring
+
 The HyperPixel 4.0 connects directly to the Pi's 40-pin GPIO. No additional wiring needed.
+
+The Pro Micro plugs into the Pi over USB. Encoder A/B/button wire to pins 2/3/4 on the Pro Micro (see the Rotary Encoder section above).
 
 ---
 
 ## Case
-Case for the Pi and display with a 17° wedge stand. Prints as one piece, no supports needed.
+
+Case for the Pi and display with a 17° wedge stand. Prints as one piece, no supports needed. There's also a separate enclosure for the encoder/volume knob in the `CAD/` folder.
+
 ## Installation
 
 ```bash
@@ -150,6 +199,26 @@ SP_DC=your_sp_dc_cookie
 
 On first run, Spotipy will open a browser for OAuth authorization. Paste the redirect URL back into the terminal to complete authentication.
 
+### Pi kiosk
+
+Run Chromium in kiosk mode pointed at the server:
+
+```bash
+DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars --disable-gpu --disable-smooth-scrolling http://<your-pc-ip>:5000
+```
+
+`--disable-gpu` is intentional on the 3B+ — the software compositor is smoother than the shaky GL driver on this hardware.
+
+### Windows autostart (optional)
+
+If you're running the server on a Windows PC, there are a couple of helper scripts in the repo:
+
+- `start-pimusic-hidden.vbs` — launches the server silently in the background
+- `debug-pimusic.bat` — kills the background task and runs the server in a visible console for debugging
+- `view-log.bat` — tails `server.log`
+
+Drop a shortcut to the VBS into your Startup folder or a Scheduled Task set to "At log on" to have the server come up with the PC.
+
 ---
 
 ## Configuration
@@ -161,11 +230,11 @@ On first run, Spotipy will open a browser for OAuth authorization. Paste the red
 | `SPOTIPY_CLIENT_ID` | Yes | Spotify app Client ID |
 | `SPOTIPY_CLIENT_SECRET` | Yes | Spotify app Client Secret |
 | `SPOTIPY_REDIRECT_URI` | Yes | OAuth redirect URI (default `http://127.0.0.1:8080`) |
-| `SP_DC` | No(only for canvas) | Spotify `sp_dc` cookie for Canvas/web player token |
+| `SP_DC` | No (only for canvas) | Spotify `sp_dc` cookie for Canvas/web player token |
 
 ### Settings page
 
-Navigate to `/settings` in your browser to configure:
+Navigate to `/settings` in your browser (or 4-press the encoder) to configure:
 
 - Spotify credentials (SP_DC, Client ID/Secret, Redirect URI)
 - Cider API token and host
@@ -173,6 +242,7 @@ Navigate to `/settings` in your browser to configure:
 - CPU threshold for automatic video disable
 - Scanline overlay toggle
 - Auto cinematic mode toggle
+- Clear album art cache
 
 Settings are persisted to `~/pimusic/settings.json`.
 
@@ -183,14 +253,14 @@ Settings are persisted to `~/pimusic/settings.json`.
 
 | Action | How |
 |--------|-----|
-| Play / Pause | Click the center button |
-| Next / Previous | Click the skip buttons |
+| Play / Pause | Click the center button, or single-press the encoder |
+| Next / Previous | Click the skip buttons, or double/triple-press the encoder |
 | Seek | Drag the progress bar |
-| Volume | Drag the volume slider |
+| Volume | Drag the volume slider, or turn the encoder |
 | Switch source | Click the source badge dropdown (Spotify / Apple Music) |
 | Fullscreen | Click the album art |
 | Exit fullscreen | Click the video, background, or empty space |
-| Settings | Click the gear icon or go to `/settings` |
+| Settings | Click the gear icon, go to `/settings`, or 4-press the encoder |
 
 ---
 
@@ -221,6 +291,7 @@ Settings are persisted to `~/pimusic/settings.json`.
 |--------|----------|-------------|
 | GET | `/api/settings` | Get all settings |
 | POST | `/api/settings` | Update settings (partial or full JSON) |
+| POST | `/api/clear-cache` | Delete the on-disk album art cache |
 
 ### System
 
@@ -228,7 +299,8 @@ Settings are persisted to `~/pimusic/settings.json`.
 |--------|----------|-------------|
 | GET | `/api/system/cpu` | CPU usage and video throttle status |
 | POST | `/api/force-reauth` | Clear Spotify token cache and re-authenticate |
-| POST | `/api/hid/input` | ESP32 HID input (`{ "action": "next" }`) |
+| POST | `/api/spotify/reauth` | Trigger a Playwright web-player token refresh |
+| POST | `/api/hid/input` | HTTP-based HID input (`{ "action": "next" }`) — legacy, encoder uses USB HID now |
 
 ### Static
 
@@ -243,31 +315,50 @@ Settings are persisted to `~/pimusic/settings.json`.
 
 ```
 PiMusic/
-├── spotify_server.py        # Flask server, routes, settings persistence
+├── spotify_server.py        # Flask server, routes, settings persistence, canvas proxy
 ├── spotify_controller.py    # Spotify API polling, Canvas GraphQL fetch
 ├── spotify_auth.py          # Spotipy auth, Playwright token capture
 ├── cider_controller.py      # Cider (Apple Music) polling, Spotify Canvas cross-lookup
 ├── source_manager.py        # Active source detection, command dispatch
 ├── scrobbler.py             # Timer-based scrobble tracker
 ├── resource_monitor.py      # CPU monitoring, video disable threshold
-├── album_cache.py           # Album art download, dominant color extraction
+├── album_cache.py           # Album art download, dominant color extraction, quota pruning
 ├── requirements.txt         # Python dependencies
 ├── BOM.csv                  # Bill of materials with links
-├── .env                     # Environment variables (not tracked)
+├── .env.example             # Template for credentials
+├── .gitignore
 ├── .gitattributes
+├── start-pimusic-hidden.vbs # Windows: launch server silently at login
+├── debug-pimusic.bat        # Windows: run server in visible console
+├── view-log.bat             # Windows: tail server.log
 ├── static/
-│   ├── app.js               # Frontend: polling, rendering, controls, cinematic toggle
+│   ├── app.js               # Frontend: polling, rendering, controls, cinematic toggle, encoder keydown handling
 │   ├── style.css            # All visual styling and layout modes
-│   └── settings.js          # Settings page logic
+│   └── settings.js          # Settings page logic, encoder navigation
 ├── templates/
 │   ├── index.html           # Main player page
 │   └── settings.html        # Settings page
+├── firmware/
+│   └── pimusic_encoder/     # Arduino sketch for the Pro Micro encoder
 ├── canvas-finder/           # Canvas URL lookup tooling
-├── cad/                     # SolidWorks files, STEP
+├── CAD/                     # SolidWorks files, STEP, and STL for the case and knob enclosure
 └── renders/                 # Assembly renders
 ```
 
 
+
+---
+
+## Recent Changes
+
+A pile of reliability work on top of v2.0:
+
+- **Rotary encoder support** — Pro Micro firmware and web-side keydown handling for volume, play/pause, next, previous, and opening settings. Settings page is fully navigable with just the encoder.
+- **Canvas reliability** — Bounded per-track URL cache, deduplicated in-flight CDN downloads, token refresh on both 401 and 403, and Chrome TLS impersonation via `curl_cffi` for the CDN fetch (Spotify's CDN fingerprints clients).
+- **Album art race fixes** — Art caching moved off the poll thread, atomic file writes, client-side token guard so a slow image load can't overwrite newer state, and an on-disk quota that prunes to 200 MB.
+- **Smoother scrobbler** — Replaced continuous drift correction with discrete resyncs on pause/unpause/seek/skip. Progress bar uses GPU-composited transforms and throttles to ~30 fps.
+- **Thread-safety audit** — `_canvas_lock` is never held across callbacks or `_apply_canvas` anymore (was causing self-deadlocks on cache hits). Playwright token capture is gated by a flag so bursts of 401s can't spawn multiple Chromium instances.
+- **Touchscreen polish** — Bigger touch targets on the settings page, custom tile picker for visual mode, and a multi-press encoder shortcut for opening settings since the gear icon is tiny on an 800x480 display.
 
 ---
 

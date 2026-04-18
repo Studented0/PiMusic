@@ -4,11 +4,13 @@
 import json
 import os
 import threading
+import time
 
 import dotenv
 dotenv.load_dotenv()
 from flask import Flask, Response, jsonify, render_template, request, send_from_directory
 import requests as http_requests
+from curl_cffi import requests as cffi_requests
 
 from spotify_auth import (
     get_spotify_client, SP_DC, CLIENT_ID, REDIRECT_URI,
@@ -19,6 +21,7 @@ from spotify_controller import (
     get_canvas_cdn_url,
     start_polling,
 )
+from album_cache import prune_art_cache
 import cider_controller
 import source_manager
 import resource_monitor
@@ -180,47 +183,111 @@ def serve_art(filename):
 
 _canvas_bytes_cache = {}
 _CANVAS_CACHE_MAX = 10
+_canvas_ram_lock = threading.Lock()
+_canvas_inflight = {}  # track_id -> threading.Event (set when fetch completes)
+
+
+def _canvas_mp4_headers():
+    return {
+        "Access-Control-Allow-Origin": "*",
+        "Cache-Control": "public, max-age=86400",
+    }
 
 
 @app.route("/api/canvas/<path:filename>")
 def serve_canvas_proxy(filename):
     """Stream canvas MP4 from RAM cache, fetching from CDN on first request."""
     track_id = filename.replace(".mp4", "")
-    if track_id in _canvas_bytes_cache:
-        return Response(
-            _canvas_bytes_cache[track_id],
-            mimetype="video/mp4",
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Cache-Control": "public, max-age=86400",
-            },
-        )
+
+    with _canvas_ram_lock:
+        if track_id in _canvas_bytes_cache:
+            return Response(
+                _canvas_bytes_cache[track_id],
+                mimetype="video/mp4",
+                headers=_canvas_mp4_headers(),
+            )
 
     cdn_url = get_canvas_cdn_url(track_id)
     if not cdn_url:
         return Response("not found", status=404)
 
+    fetcher = False
+    wait_ev = None
+    with _canvas_ram_lock:
+        if track_id in _canvas_bytes_cache:
+            return Response(
+                _canvas_bytes_cache[track_id],
+                mimetype="video/mp4",
+                headers=_canvas_mp4_headers(),
+            )
+        if track_id in _canvas_inflight:
+            wait_ev = _canvas_inflight[track_id]
+        else:
+            wait_ev = threading.Event()
+            _canvas_inflight[track_id] = wait_ev
+            fetcher = True
+
+    if not fetcher:
+        wait_ev.wait(timeout=90)
+        with _canvas_ram_lock:
+            data = _canvas_bytes_cache.get(track_id)
+        if data is None:
+            return Response("fetch failed", status=502)
+        return Response(
+            data,
+            mimetype="video/mp4",
+            headers=_canvas_mp4_headers(),
+        )
+
     try:
-        resp = http_requests.get(cdn_url, timeout=15)
+        resp = cffi_requests.get(
+            cdn_url,
+            timeout=15,
+            impersonate="chrome131",
+            headers={
+                "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
+                "Referer": "https://open.spotify.com/",
+            },
+        )
         resp.raise_for_status()
+        body = resp.content
     except Exception as e:
-        print(f"Canvas proxy: CDN fetch failed for {track_id}: {e}")
+        print(f"Canvas proxy: CDN fetch failed for {track_id}: {type(e).__name__}")
+        with _canvas_ram_lock:
+            _canvas_inflight.pop(track_id, None)
+            wait_ev.set()
         return Response("fetch failed", status=502)
 
-    if len(_canvas_bytes_cache) >= _CANVAS_CACHE_MAX:
-        oldest = next(iter(_canvas_bytes_cache))
-        del _canvas_bytes_cache[oldest]
-
-    _canvas_bytes_cache[track_id] = resp.content
+    with _canvas_ram_lock:
+        if len(_canvas_bytes_cache) >= _CANVAS_CACHE_MAX:
+            oldest = next(iter(_canvas_bytes_cache))
+            del _canvas_bytes_cache[oldest]
+        _canvas_bytes_cache[track_id] = body
+        _canvas_inflight.pop(track_id, None)
+        wait_ev.set()
 
     return Response(
-        resp.content,
+        body,
         mimetype="video/mp4",
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Cache-Control": "public, max-age=86400",
-        },
+        headers=_canvas_mp4_headers(),
     )
+
+
+@app.route("/api/clear-cache", methods=["POST"])
+def api_clear_cache():
+    """Delete all files in art_cache/ (album art JPEGs)."""
+    removed = 0
+    try:
+        if os.path.isdir(ART_DIR):
+            for name in os.listdir(ART_DIR):
+                path = os.path.join(ART_DIR, name)
+                if os.path.isfile(path):
+                    os.remove(path)
+                    removed += 1
+    except Exception as e:
+        print(f"Clear art cache error: {e}")
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True, "removed": removed})
 
 
 # ── Source management ────────────────────────────────────
@@ -374,6 +441,19 @@ if __name__ == "__main__":
 
     source_manager.start_detection()
     resource_monitor.start()
+
+    def _art_prune_daemon():
+        time.sleep(3)
+        while True:
+            try:
+                n = prune_art_cache()
+                if n:
+                    print(f"Art cache prune: removed {n} oldest file(s)")
+            except Exception as e:
+                print(f"Art cache prune error: {e}")
+            time.sleep(3600)
+
+    threading.Thread(target=_art_prune_daemon, daemon=True).start()
 
     print("PiMusic server running on http://0.0.0.0:5000")
     app.run(host="0.0.0.0", port=5000, debug=False)

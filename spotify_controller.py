@@ -33,8 +33,20 @@ _lock = threading.Lock()
 _previous_track_id = None
 _canvas_cache = {}
 _canvas_lock = threading.Lock()
+_CANVAS_CACHE_MAX_ENTRIES = 256
+
+
+def _canvas_cache_store(track_id: str, cdn_url):
+    """Bounded FIFO-style insert (dict preserves insertion order in Py3.7+)."""
+    with _canvas_lock:
+        if len(_canvas_cache) >= _CANVAS_CACHE_MAX_ENTRIES and track_id not in _canvas_cache:
+            _canvas_cache.pop(next(iter(_canvas_cache)))
+        _canvas_cache[track_id] = cdn_url
 _active_device_id = None
 _sp_ref = None
+
+_art_inflight = set()
+_art_inflight_lock = threading.Lock()
 
 _last_play_cmd = 0.0
 _last_pause_cmd = 0.0
@@ -43,6 +55,8 @@ _CMD_COOLDOWN = 1.0
 _SKIP_COOLDOWN = 0.5
 
 POLL_INTERVAL = 5  # Reduced from 1 to avoid rate limits (was 60 req/min, now 12)
+POLL_INTERVAL_NEAR_END = 1  # Fast poll inside the last NEAR_END_MS of a track
+NEAR_END_MS = 15_000
 _poll_counter = 0
 _force_poll_timer = None
 _force_poll_timer_lock = threading.Lock()
@@ -126,12 +140,10 @@ def _fetch_canvas_graphql(track_id):
         if not track_id or _check_rate_limited():
             return
         with _canvas_lock:
-            if track_id in _canvas_cache:
-                _apply_canvas(track_id)
-                return
-        with _lock:
-            if _previous_track_id != track_id:
-                return
+            cached_hit = track_id in _canvas_cache
+        if cached_hit:
+            _apply_canvas(track_id)
+            return
 
         cdn_url = None
         try:
@@ -147,8 +159,8 @@ def _fetch_canvas_graphql(track_id):
                     print("Canvas found for " + track_id + ": " + cdn_url[:60] + "...")
                 else:
                     print("Canvas: track " + track_id + " has no canvas")
-            elif status == 403:
-                print("Canvas 403 for " + track_id + " – forcing token refresh and retrying...")
+            elif status in (401, 403):
+                print("Canvas " + str(status) + " for " + track_id + " – forcing token refresh and retrying...")
                 start_wp_token_refresh()
                 time.sleep(12)
                 bearer2, client_token2 = get_web_player_tokens()
@@ -171,8 +183,7 @@ def _fetch_canvas_graphql(track_id):
         with _lock:
             if _current_data.get("track_id") != track_id:
                 return
-        with _canvas_lock:
-            _canvas_cache[track_id] = cdn_url
+        _canvas_cache_store(track_id, cdn_url)
         _apply_canvas(track_id)
 
     t = threading.Thread(target=_work, daemon=True)
@@ -202,20 +213,24 @@ def get_canvas_cdn_url(track_id):
 def _grab_device(sp):
     global _active_device_id
     if _check_rate_limited():
-        return _active_device_id
+        with _lock:
+            return _active_device_id
     try:
         devs = sp.devices().get("devices", [])
         for d in devs:
             if d.get("is_active"):
-                _active_device_id = d["id"]
-                print("Active device: " + d.get("name", "?") + " (" + _active_device_id[:12] + "...)")
-                return _active_device_id
+                did = d["id"]
+                with _lock:
+                    _active_device_id = did
+                print("Active device: " + d.get("name", "?") + " (" + did[:12] + "...)")
+                return did
         if devs:
             target = devs[0]["id"]
             sp.transfer_playback(target, force_play=False)
-            _active_device_id = target
+            with _lock:
+                _active_device_id = target
             print("Transferred playback to: " + devs[0].get("name", target[:12]))
-            return _active_device_id
+            return target
         print("No Spotify devices found")
     except SpotifyException as e:
         if getattr(e, "http_status", None) == 429:
@@ -227,7 +242,8 @@ def _grab_device(sp):
             _set_rate_limited(None)
         else:
             print("Device grab error: " + str(e))
-    return _active_device_id
+    with _lock:
+        return _active_device_id
 
 
 def force_poll():
@@ -247,12 +263,48 @@ def force_poll():
         _force_poll_timer.start()
 
 
+def _spawn_art_cache(track_id, art_url):
+    """Download art + compute dominant color off the poll thread.
+    Only writes back to _current_data if the active track_id is still the same.
+    """
+    if not track_id or not art_url:
+        return
+    with _art_inflight_lock:
+        if track_id in _art_inflight:
+            return
+        _art_inflight.add(track_id)
+
+    def _work():
+        local = None
+        color = None
+        try:
+            local = cache_art(art_url)
+            if local:
+                color = get_dominant_color(art_url)
+        except Exception:
+            pass
+        finally:
+            with _art_inflight_lock:
+                _art_inflight.discard(track_id)
+        if not local:
+            return
+        with _lock:
+            if _current_data.get("track_id") != track_id:
+                return
+            _current_data["album_art_local"] = "/art/" + local
+            if color and color != "#1a1a2e":
+                _current_data["dominant_color"] = color
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
 def _do_poll(sp):
     global _previous_track_id, _active_device_id, _poll_counter
     if _check_rate_limited():
         return
-    _poll_counter += 1
-    my_id = _poll_counter
+    with _lock:
+        _poll_counter += 1
+        my_id = _poll_counter
     try:
         pb = sp.current_playback()
         now = time.time()
@@ -276,41 +328,41 @@ def _do_poll(sp):
             if volume is None:
                 volume = 0
             if device.get("id"):
-                _active_device_id = device["id"]
+                with _lock:
+                    _active_device_id = device["id"]
 
-            track_changed = track_id != _previous_track_id
+            with _lock:
+                prev_tid = _previous_track_id
+                prev_local = _current_data.get("album_art_local", "")
+                prev_color = _current_data.get("dominant_color", "#1a1a2e")
+                prev_changed_at = _current_data.get("track_changed_at", 0)
+
+            track_changed = track_id != prev_tid
 
             if track_changed:
                 scrobbler_reset()
-                _previous_track_id = track_id
-                local_art = cache_art(art_url) if art_url else ""
-                color = get_dominant_color(art_url) if art_url else "#1a1a2e"
+                local_art_path = ""
+                color = "#1a1a2e"
                 track_changed_at = now
                 with _lock:
                     _current_data["canvas_url"] = None
                 _fetch_canvas_graphql(track_id)
             else:
-                with _lock:
-                    prev_local = _current_data.get("album_art_local", "")
-                    prev_color = _current_data.get("dominant_color", "#1a1a2e")
-                    track_changed_at = _current_data.get("track_changed_at", 0)
-                if prev_local:
-                    local_art = prev_local.replace("/art/", "")
-                else:
-                    local_art = cache_art(art_url) if art_url else ""
-                color = prev_color if prev_color != "#1a1a2e" else (get_dominant_color(art_url) if art_url else "#1a1a2e")
+                local_art_path = prev_local
+                color = prev_color
+                track_changed_at = prev_changed_at
 
             scrobbler_update(track_id, track_name, artists, duration, is_playing, progress)
 
-            if my_id != _poll_counter:
-                return
             with _lock:
+                if my_id != _poll_counter:
+                    return
                 _current_data.update({
                     "artist": artists,
                     "track": track_name,
                     "album": album_name,
                     "album_art_url": art_url,
-                    "album_art_local": ("/art/" + local_art) if local_art else "",
+                    "album_art_local": local_art_path,
                     "dominant_color": color,
                     "progress_ms": progress,
                     "duration_ms": duration,
@@ -321,10 +373,15 @@ def _do_poll(sp):
                     "server_time": now,
                     "track_changed_at": track_changed_at,
                 })
+                if track_changed:
+                    _previous_track_id = track_id
+
+            if art_url and (track_changed or not local_art_path):
+                _spawn_art_cache(track_id, art_url)
         else:
-            if my_id != _poll_counter:
-                return
             with _lock:
+                if my_id != _poll_counter:
+                    return
                 _current_data.update({
                     "is_playing": False,
                     "track": "",
@@ -351,7 +408,12 @@ def _poll_loop(sp):
                 time.sleep(wait)
             continue
         _do_poll(sp)
-        time.sleep(POLL_INTERVAL)
+        with _lock:
+            is_playing = _current_data.get("is_playing", False)
+            duration = _current_data.get("duration_ms", 0) or 0
+            progress = _current_data.get("progress_ms", 0) or 0
+        near_end = is_playing and duration > 0 and (duration - progress) < NEAR_END_MS
+        time.sleep(POLL_INTERVAL_NEAR_END if near_end else POLL_INTERVAL)
 
 
 def start_polling(sp):
@@ -373,8 +435,12 @@ def get_current_data():
             cdn = _canvas_cache.get(tid)
         if cdn:
             d["canvas_url"] = _canvas_proxy_url(tid)
+            d["canvas_cdn_url"] = cdn
         else:
             d["canvas_url"] = None
+            d["canvas_cdn_url"] = None
+    else:
+        d["canvas_cdn_url"] = None
     d["visual_type"] = "canvas_video" if d.get("canvas_url") else "image"
     return d
 
@@ -522,7 +588,8 @@ def seek_track(sp, position_ms):
 
 def set_volume(sp, volume_percent):
     vol = max(0, min(100, volume_percent))
-    dev = _active_device_id
+    with _lock:
+        dev = _active_device_id
     try:
         if dev:
             sp.volume(vol, device_id=dev)
@@ -540,13 +607,11 @@ def fetch_canvas_for_external(track_id, callback):
     callback(track_id, proxy_url_or_None) when done."""
     def _work():
         with _canvas_lock:
-            cached = _canvas_cache.get(track_id)
-            if cached is not None:
-                callback(track_id, _canvas_proxy_url(track_id) if cached else None)
-                return
-            if track_id in _canvas_cache:
-                callback(track_id, None)
-                return
+            has_key = track_id in _canvas_cache
+            cached = _canvas_cache.get(track_id) if has_key else None
+        if has_key:
+            callback(track_id, _canvas_proxy_url(track_id) if cached else None)
+            return
 
         if _check_rate_limited() or not track_id:
             callback(track_id, None)
@@ -567,8 +632,8 @@ def fetch_canvas_for_external(track_id, callback):
                     print(f"[Canvas External] Found for {track_id}: {cdn_url[:60]}...")
                 else:
                     print(f"[Canvas External] No canvas for {track_id}")
-            elif status == 403:
-                print(f"[Canvas External] 403 for {track_id}, refreshing token...")
+            elif status in (401, 403):
+                print(f"[Canvas External] {status} for {track_id}, refreshing token...")
                 start_wp_token_refresh()
                 time.sleep(12)
                 bearer2, ct2 = get_web_player_tokens()
@@ -582,8 +647,7 @@ def fetch_canvas_for_external(track_id, callback):
         except Exception as e:
             print(f"[Canvas External] Error for {track_id}: {e}")
 
-        with _canvas_lock:
-            _canvas_cache[track_id] = cdn_url
+        _canvas_cache_store(track_id, cdn_url)
 
         proxy = _canvas_proxy_url(track_id) if cdn_url else None
         callback(track_id, proxy)

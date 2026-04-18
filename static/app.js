@@ -29,15 +29,17 @@
     sourceIconCider:   $("#source-icon-cider")
   };
 
-  console.error("[PiMusic] app.js v25 loaded at " + new Date().toISOString());
+  console.error("[PiMusic] app.js v43 loaded at " + new Date().toISOString());
 
-  var POLL_MS           = 1000;
-  var DRIFT_CORRECT_MS  = 1500;
-  var TEXT_UPDATE_MS    = 200;
-  var SNAPBACK_GUARD_MS = 5000;
-  var BTN_COOLDOWN_MS   = 500;
-  var INPUT_LOCK_MS     = 5000;
-  var STALE_EXTEND_MS   = 2000;
+  var POLL_MS            = 1000;
+  var DRIFT_CORRECT_MS   = 1500;
+  var TEXT_UPDATE_MS     = 200;
+  var SNAPBACK_GUARD_MS  = 5000;
+  var BTN_COOLDOWN_MS    = 500;
+  var INPUT_LOCK_MS      = 5000;
+  var STALE_EXTEND_MS    = 2000;
+  var RENDER_MIN_INTERVAL_MS = 33;    // ~30 fps
+  var VOL_DEBOUNCE_MS    = 450;
 
   var state = {
     is_playing: false,
@@ -52,6 +54,7 @@
     volume: 50,
     track_id: "",
     canvas_url: null,
+    canvas_cdn_url: null,
     visual_type: "image",
     source: "spotify",
     server_time: 0,
@@ -69,7 +72,8 @@
 
   var trackChangeLocalTs = 0;
 
-  var prevRenderedArt     = "";
+  var prevRenderedArtKey  = "";
+  var artLoadToken        = 0;
   var prevRenderedTitle   = "";
   var prevRenderedArtist  = "";
   var prevRenderedDevice  = "";
@@ -81,9 +85,23 @@
 
   var activeCanvasSrc = "";
   var activeVisualType = "image";
+  var canvasProxyUrl = "";
+  var canvasDirectUrl = "";
+  var canvasFallbackTried = false;
+  var canvasWatchdogTimer = null;
+  var CANVAS_WATCHDOG_MS = 6000;
   var canvasMode = false;
   var visualMode = "canvas_card";
   var artworkWrap = $("#artwork-wrap");
+
+  var barWidth = dom.bar.offsetWidth;
+  if (window.ResizeObserver) {
+    new ResizeObserver(function (entries) {
+      barWidth = entries[0].contentRect.width;
+    }).observe(dom.bar);
+  } else {
+    window.addEventListener("resize", function () { barWidth = dom.bar.offsetWidth; });
+  }
 
   var volDragging    = false;
   var volTimer       = null;
@@ -95,9 +113,11 @@
   var seekTarget     = 0;
   var cooldownUntil      = 0;
   var lastTextUpdate     = 0;
+  var lastRenderTs       = 0;
   var pendingSkip        = false;
   var pollReqId          = 0;
   var playbackLockUntil  = 0;
+  var pendingServerResync = false;
 
   /* ── Predictive clock ─────────────────────────────────── */
 
@@ -134,6 +154,8 @@
     clockSet(serverMs);
   }
 
+  var trackEndPolled = false;
+
   function clockTick() {
     if (driftTarget !== null) {
       if (performance.now() - driftStart >= driftDuration) {
@@ -142,6 +164,11 @@
         clockRate   = 1.0;
         driftTarget = null;
       }
+    }
+    if (state.is_playing && state.duration_ms > 0 && !trackEndPolled
+        && clockNow() >= state.duration_ms - 500) {
+      trackEndPolled = true;
+      emergencyPoll(0);
     }
   }
 
@@ -177,46 +204,84 @@
     dom.canvas.removeAttribute("src");
     dom.canvas.load();
     document.body.classList.remove("has-canvas");
-    if (canvasMode) exitCinematic();
   }
 
-  function applyCanvas(url, visualType) {
-    syncBackgroundMode();
-
-    if (!url || visualType === "image") {
-      if (activeCanvasSrc) {
-        console.error("[PiMusic] CANVAS: clearing");
-        activeCanvasSrc = "";
-        activeVisualType = "image";
-        clearCanvas();
-      }
-      return;
+  function cancelCanvasWatchdog() {
+    if (canvasWatchdogTimer) {
+      clearTimeout(canvasWatchdogTimer);
+      canvasWatchdogTimer = null;
     }
+  }
 
-    if (url === activeCanvasSrc && visualType === activeVisualType) return;
+  function giveUpCanvas() {
+    cancelCanvasWatchdog();
+    canvasProxyUrl = "";
+    canvasDirectUrl = "";
+    canvasFallbackTried = false;
+    activeCanvasSrc = "";
+    activeVisualType = "image";
+    clearCanvas();
+  }
 
-    console.error("[PiMusic] CANVAS: setting src = " + url + " type=" + visualType);
-    activeCanvasSrc = url;
-    activeVisualType = visualType;
+  function tryCanvasFallback(reason) {
+    if (!canvasFallbackTried && canvasDirectUrl) {
+      canvasFallbackTried = true;
+      console.error("[PiMusic] CANVAS: falling back to direct CDN (" + reason + "): " + canvasDirectUrl);
+      loadCanvasSrc(canvasDirectUrl);
+    } else {
+      console.error("[PiMusic] CANVAS: giving up (" + reason + ")");
+      giveUpCanvas();
+    }
+  }
 
-    dom.canvas.classList.remove("active");
+  function loadCanvasSrc(src) {
+    cancelCanvasWatchdog();
+    activeCanvasSrc = src;
 
     dom.canvas.oncanplay = function () {
       console.error("[PiMusic] CANVAS: oncanplay -> play()");
+      cancelCanvasWatchdog();
       dom.canvas.classList.add("active");
       document.body.classList.add("has-canvas");
       dom.canvas.play().catch(function () {});
     };
 
     dom.canvas.onerror = function () {
-      console.error("[PiMusic] CANVAS: onerror fired");
-      activeCanvasSrc = "";
-      activeVisualType = "image";
-      clearCanvas();
+      tryCanvasFallback("onerror");
     };
 
-    dom.canvas.src = url;
+    canvasWatchdogTimer = setTimeout(function () {
+      canvasWatchdogTimer = null;
+      if (!dom.canvas.classList.contains("active")) {
+        tryCanvasFallback("watchdog");
+      }
+    }, CANVAS_WATCHDOG_MS);
+
+    dom.canvas.src = src;
     dom.canvas.load();
+  }
+
+  function applyCanvas(proxyUrl, cdnUrl, visualType) {
+    syncBackgroundMode();
+
+    if (!proxyUrl || visualType === "image") {
+      if (canvasProxyUrl || activeCanvasSrc) {
+        console.error("[PiMusic] CANVAS: clearing");
+        giveUpCanvas();
+      }
+      return;
+    }
+
+    if (proxyUrl === canvasProxyUrl && visualType === activeVisualType) return;
+
+    console.error("[PiMusic] CANVAS: setting proxy=" + proxyUrl + " cdn=" + (cdnUrl ? "yes" : "no"));
+    canvasProxyUrl = proxyUrl;
+    canvasDirectUrl = cdnUrl || "";
+    canvasFallbackTried = false;
+    activeVisualType = visualType;
+
+    dom.canvas.classList.remove("active");
+    loadCanvasSrc(proxyUrl);
   }
 
   /* ── Source badge ──────────────────────────────────────── */
@@ -246,6 +311,12 @@
 
   var sourceDropdown = document.getElementById("source-dropdown");
   var sourceDropdownWrap = dom.sourceBadge ? dom.sourceBadge.parentElement : null;
+
+  if (dom.trackInfo) {
+    dom.trackInfo.addEventListener("click", function (e) {
+      e.stopPropagation();
+    });
+  }
 
   if (dom.sourceBadge && sourceDropdown && sourceDropdownWrap) {
     dom.sourceBadge.addEventListener("click", function (e) {
@@ -282,6 +353,7 @@
 
   function enterCinematic() {
     canvasMode = true;
+    document.body.classList.remove("canvas-background");
     document.body.insertBefore(dom.canvas, document.body.firstChild);
     document.body.classList.add("canvas-cinematic");
   }
@@ -293,6 +365,7 @@
   }
 
   function syncBackgroundMode() {
+    if (canvasMode) return;
     if (visualMode === "canvas_bg") {
       document.body.classList.add("canvas-background");
     } else {
@@ -304,6 +377,8 @@
 
   function render(timestamp) {
     requestAnimationFrame(render);
+    if (timestamp - lastRenderTs < RENDER_MIN_INTERVAL_MS) return;
+    lastRenderTs = timestamp;
     clockTick();
 
     var p   = clockNow();
@@ -315,7 +390,7 @@
       if (pctRound !== prevPct) {
         prevPct = pctRound;
         dom.fill.style.transform = "scaleX(" + pct + ")";
-        dom.thumb.style.left     = (pct * 100) + "%";
+        dom.thumb.style.setProperty("--thumb-x", (pct * barWidth) + "px");
       }
     }
 
@@ -372,20 +447,47 @@
       dom.volSlider.value = state.volume;
     }
 
-    /* Album art */
-    var artSrc = state.album_art_local || state.album_art_url || "";
-    if (artSrc && artSrc !== prevRenderedArt) {
-      prevRenderedArt = artSrc;
+    var primarySrc = state.album_art_local || state.album_art_url || "";
+    var artKey = (state.track_id || "") + "|" + primarySrc;
+    if (primarySrc && artKey !== prevRenderedArtKey) {
+      prevRenderedArtKey = artKey;
+      loadAlbumArt(primarySrc, state.album_art_url || "");
+    }
+  }
+
+  function loadAlbumArt(primarySrc, directUrl) {
+    var myToken = ++artLoadToken;
+    var sources = [primarySrc];
+    if (directUrl && directUrl !== primarySrc) sources.push(directUrl);
+
+    var tryLoad = function (idx) {
+      if (myToken !== artLoadToken) return;
+      if (idx >= sources.length) {
+        console.warn("[PiMusic] ART: all sources failed, keeping previous");
+        if (myToken === artLoadToken) prevRenderedArtKey = "";
+        return;
+      }
+      var src = sources[idx];
       var img = new Image();
       img.onload = function () {
+        if (myToken !== artLoadToken) return;
         dom.art.classList.remove("fresh");
         void dom.art.offsetWidth;
-        dom.art.src = artSrc;
+        dom.art.src = src;
         dom.art.classList.add("fresh");
-        dom.bg.style.backgroundImage = "url(\"" + artSrc + "\")";
+        dom.bg.style.backgroundImage = 'url("' + src + '")';
+        if (idx > 0) {
+          console.warn("[PiMusic] ART: recovered via fallback source " + idx);
+        }
       };
-      img.src = artSrc;
-    }
+      img.onerror = function () {
+        if (myToken !== artLoadToken) return;
+        console.warn("[PiMusic] ART: failed attempt " + (idx + 1) + ": " + src);
+        tryLoad(idx + 1);
+      };
+      img.src = src;
+    };
+    tryLoad(0);
   }
 
   /* ── API polling (1s) ─────────────────────────────────── */
@@ -399,7 +501,7 @@
         if (myReqId !== pollReqId) return;
         var trackChanged = data.track_id && data.track_id !== state.track_id;
 
-        if (pendingSkip) {
+        if (pendingSkip && trackChanged) {
           pendingSkip = false;
           dom.trackInfo.classList.remove("stale");
         }
@@ -430,12 +532,18 @@
           }
         }
 
-        var incomingProgress = data.progress_ms;
         var incomingCanvas   = data.canvas_url || null;
+        var incomingCdn      = data.canvas_cdn_url || null;
         var incomingVisual   = (data.visual_type === "canvas_video") ? "canvas_video" : "image";
         var incomingSource   = data.source || "spotify";
         state.cpu_throttled  = !!data.cpu_throttled;
         if (data.visual_mode) visualMode = data.visual_mode;
+        if (canvasMode && visualMode === "canvas_bg") {
+          exitCinematic();
+        }
+
+        var playingTransition = data.is_playing !== undefined
+                             && data.is_playing !== state.is_playing;
 
         Object.assign(state, data);
         dom.player.classList.remove("connecting");
@@ -453,14 +561,17 @@
         if (trackChanged) {
           trackChangeLocalTs = now;
           clockSet(state.progress_ms || 0);
-          prevRenderedArt    = "";
+          trackEndPolled     = false;
+          pendingServerResync = false;
           prevRenderedTitle  = "";
           prevRenderedArtist = "";
-        } else if (incomingProgress !== undefined) {
-          clockApplyDrift(incomingProgress);
+        } else if (data.progress_ms !== undefined
+                   && (playingTransition || pendingServerResync)) {
+          clockSet(data.progress_ms);
+          pendingServerResync = false;
         }
 
-        applyCanvas(incomingCanvas, incomingVisual);
+        applyCanvas(incomingCanvas, incomingCdn, incomingVisual);
       });
     }).catch(function (e) {
       console.error("[PiMusic] Poll error:", e);
@@ -474,7 +585,8 @@
   function isCooling() { return performance.now() < cooldownUntil; }
   function setCooldown(ms) { cooldownUntil = performance.now() + ms; }
 
-  dom.btnPlay.addEventListener("click", function () {
+  dom.btnPlay.addEventListener("click", function (e) {
+    e.stopPropagation();
     if (isCooling()) return;
     setCooldown(BTN_COOLDOWN_MS);
     playbackLockUntil = performance.now() + 1500;
@@ -490,16 +602,20 @@
       driftTarget = null;
       post("/api/play");
     }
+    pendingServerResync = true;
+    emergencyPoll(400);
   });
 
-  dom.btnNext.addEventListener("click", function () {
+  dom.btnNext.addEventListener("click", function (e) {
+    e.stopPropagation();
     if (isCooling()) return;
     setCooldown(BTN_COOLDOWN_MS);
     pendingSkip = true;
     dom.trackInfo.classList.add("stale");
     state.canvas_url = null;
+    state.canvas_cdn_url = null;
     state.visual_type = "image";
-    applyCanvas(null, "image");
+    applyCanvas(null, null, "image");
     clockSet(0);
     state.is_playing = true;
     trackChangeLocalTs = performance.now();
@@ -507,14 +623,16 @@
     emergencyPoll(350);
   });
 
-  dom.btnPrev.addEventListener("click", function () {
+  dom.btnPrev.addEventListener("click", function (e) {
+    e.stopPropagation();
     if (isCooling()) return;
     setCooldown(BTN_COOLDOWN_MS);
     pendingSkip = true;
     dom.trackInfo.classList.add("stale");
     state.canvas_url = null;
+    state.canvas_cdn_url = null;
     state.visual_type = "image";
-    applyCanvas(null, "image");
+    applyCanvas(null, null, "image");
     clockSet(0);
     state.is_playing = true;
     trackChangeLocalTs = performance.now();
@@ -523,7 +641,8 @@
   });
 
   /* Volume */
-  dom.volSlider.addEventListener("pointerdown", function () {
+  dom.volSlider.addEventListener("pointerdown", function (e) {
+    e.stopPropagation();
     volDragging = true;
     volBeforeDrag = state.volume;
   });
@@ -535,11 +654,12 @@
   });
 
   dom.volSlider.addEventListener("input", function (e) {
+    e.stopPropagation();
     state.volume = parseInt(e.target.value, 10);
     clearTimeout(volTimer);
     volTimer = setTimeout(function () {
       post("/api/volume", { volume: state.volume });
-    }, 200);
+    }, VOL_DEBOUNCE_MS);
   });
 
   /* Progress bar seek (drag-to-scrub) */
@@ -550,12 +670,13 @@
     clockSet(posMs);
     seekTarget = posMs;
     dom.fill.style.transform = "scaleX(" + pct + ")";
-    dom.thumb.style.left     = (pct * 100) + "%";
+    dom.thumb.style.setProperty("--thumb-x", (pct * rect.width) + "px");
     dom.timeCur.textContent  = fmt(posMs);
     return posMs;
   }
 
   dom.bar.addEventListener("pointerdown", function (e) {
+    e.stopPropagation();
     seekDragging = true;
     seekLockUntil = Infinity;
     dom.bar.setPointerCapture(e.pointerId);
@@ -576,6 +697,8 @@
     seekTimer = setTimeout(function () {
       post("/api/seek", { position_ms: posMs });
     }, 150);
+    pendingServerResync = true;
+    emergencyPoll(500);
   });
 
   dom.bar.addEventListener("pointercancel", function () {
@@ -620,7 +743,46 @@
     if (canvasMode) exitCinematic();
   });
 
+  /* ── Rotary encoder (global keyboard) ──────────────────── */
+
+  var MULTI_PRESS_MS = 350;
+  var encoderPressCount = 0;
+  var encoderPressTimer = null;
+
+  function encoderButtonPressed() {
+    encoderPressCount++;
+    clearTimeout(encoderPressTimer);
+    encoderPressTimer = setTimeout(function () {
+      var n = encoderPressCount;
+      encoderPressCount = 0;
+      if (n >= 4)       window.location.href = "/settings";
+      else if (n === 3) dom.btnPrev.click();
+      else if (n === 2) dom.btnNext.click();
+      else              dom.btnPlay.click();
+    }, MULTI_PRESS_MS);
+  }
+
+  window.addEventListener("keydown", function (e) {
+    if (e.repeat) return;
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      state.volume = Math.max(0, Math.min(100,
+        state.volume + (e.key === "ArrowUp" ? 2 : -2)));
+      dom.volSlider.value = state.volume;
+      volLockUntil = performance.now() + INPUT_LOCK_MS;
+      dom.volSlider.dispatchEvent(new Event("input"));
+    } else if (e.key === " ") {
+      e.preventDefault();
+      encoderButtonPressed();
+    }
+  });
+
   /* ── Boot ─────────────────────────────────────────────── */
+
+  dom.art.addEventListener("error", function () {
+    console.warn("[PiMusic] ART: <img> decode failed, forcing reload");
+    prevRenderedArtKey = "";
+  });
 
   console.error("[PiMusic] Boot: starting poll + render loop");
   dom.player.classList.add("connecting");

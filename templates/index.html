@@ -4,14 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <title>PiMusic</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=43">
 </head>
 <body>
   <!-- Full-screen blurred background layer -->
   <div id="bg-layer" class="bg-layer"></div>
   <div id="bg-overlay" class="bg-overlay"></div>
-
-  <div class="retro-overlay"></div>
 
   <main class="player">
     <!-- Connection / device badge -->
@@ -40,7 +38,7 @@
     <!-- Album art + canvas video overlay -->
     <div class="artwork-wrap" id="artwork-wrap">
       <img id="album-art" class="album-art" src="" alt="Album Art">
-      <video id="canvas-video" class="canvas-video" autoplay loop muted playsinline preload="metadata"></video>
+      <video id="canvas-video" class="canvas-video" autoplay loop muted playsinline preload="auto" disablepictureinpicture></video>
     </div>
 
     <!-- Track info -->
@@ -80,6 +78,6 @@
     </div>
   </main>
 
-  <script src="/static/app.js?v=25"></script>
+  <script src="/static/app.js?v=43"></script>
 </body>
 </html>

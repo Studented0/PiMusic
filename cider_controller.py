@@ -32,6 +32,7 @@ _current_data = {
     "device": "Cider",
     "track_id": "",
     "canvas_url": None,
+    "canvas_cdn_url": None,
     "visual_type": "image",
     "server_time": 0,
     "track_changed_at": 0,
@@ -40,11 +41,15 @@ _lock = threading.Lock()
 _previous_track_id = None
 _polling_active = False
 
+_art_inflight = set()
+_art_inflight_lock = threading.Lock()
+
 # Spotify client reference (set via set_spotify_client)
 _sp_ref = None
 
 # ── Spotify Canvas cross-search cache ────────────────────
 LOOKUP_CACHE_TTL = 6 * 3600  # 6 hours
+_LOOKUP_CACHE_MAX_ENTRIES = 512
 _spotify_lookup_cache = {}   # key -> (spotify_track_id_or_None, timestamp)
 _spotify_lookup_lock = threading.Lock()
 _lookup_in_progress = set()
@@ -132,6 +137,8 @@ def _cache_get(key):
 
 def _cache_set(key, spotify_id):
     with _spotify_lookup_lock:
+        if len(_spotify_lookup_cache) >= _LOOKUP_CACHE_MAX_ENTRIES and key not in _spotify_lookup_cache:
+            _spotify_lookup_cache.pop(next(iter(_spotify_lookup_cache)))
         _spotify_lookup_cache[key] = (spotify_id, time.time())
 
 
@@ -222,7 +229,7 @@ def _search_spotify_canvas(track_name, artist, cider_track_id):
 def _apply_external_canvas(spotify_track_id, cider_track_id):
     """Fetch the Spotify Canvas for spotify_track_id and write the proxy URL
     into _current_data if the Cider track hasn't changed."""
-    from spotify_controller import fetch_canvas_for_external
+    from spotify_controller import fetch_canvas_for_external, get_canvas_cdn_url
 
     def on_done(track_id, proxy_url):
         with _lock:
@@ -230,10 +237,12 @@ def _apply_external_canvas(spotify_track_id, cider_track_id):
                 return
             if proxy_url:
                 _current_data["canvas_url"] = proxy_url
+                _current_data["canvas_cdn_url"] = get_canvas_cdn_url(track_id)
                 _current_data["visual_type"] = "canvas_video"
                 print(f"[Cider->Spotify] Canvas set: {proxy_url}")
             else:
                 _current_data["canvas_url"] = None
+                _current_data["canvas_cdn_url"] = None
                 _current_data["visual_type"] = "image"
 
     fetch_canvas_for_external(spotify_track_id, on_done)
@@ -253,6 +262,41 @@ def _extract_art_url(artwork_dict):
 
 
 # ── Polling ──────────────────────────────────────────────
+
+def _spawn_art_cache(track_id, art_url):
+    """Download art + compute dominant color off the poll thread.
+    Only writes back to _current_data if the active track_id is still the same.
+    """
+    if not track_id or not art_url:
+        return
+    with _art_inflight_lock:
+        if track_id in _art_inflight:
+            return
+        _art_inflight.add(track_id)
+
+    def _work():
+        local = None
+        color = None
+        try:
+            local = cache_art(art_url)
+            if local:
+                color = get_dominant_color(art_url)
+        except Exception:
+            pass
+        finally:
+            with _art_inflight_lock:
+                _art_inflight.discard(track_id)
+        if not local:
+            return
+        with _lock:
+            if _current_data.get("track_id") != track_id:
+                return
+            _current_data["album_art_local"] = "/art/" + local
+            if color and color != "#1a1a2e":
+                _current_data["dominant_color"] = color
+
+    threading.Thread(target=_work, daemon=True).start()
+
 
 def _do_poll():
     global _previous_track_id
@@ -276,6 +320,7 @@ def _do_poll():
                 _current_data["artist"] = ""
                 _current_data["track_id"] = ""
                 _current_data["canvas_url"] = None
+                _current_data["canvas_cdn_url"] = None
                 _current_data["visual_type"] = "image"
                 _current_data["server_time"] = time.time()
             return
@@ -302,31 +347,28 @@ def _do_poll():
 
         track_changed = track_id != _previous_track_id
 
+        with _lock:
+            prev_local = _current_data.get("album_art_local", "")
+            prev_color = _current_data.get("dominant_color", "#1a1a2e")
+            prev_changed_at = _current_data.get("track_changed_at", 0)
+
         if track_changed:
             print(f"[Cider] Track changed: {artist} - {track_name}", flush=True)
             scrobbler_reset()
-            _previous_track_id = track_id
-            local_art = cache_art(art_url) if art_url else ""
-            color = get_dominant_color(art_url) if art_url else "#1a1a2e"
+            local_art_path = ""
+            color = "#1a1a2e"
             track_changed_at = now
             with _lock:
                 _current_data["canvas_url"] = None
+                _current_data["canvas_cdn_url"] = None
                 _current_data["visual_type"] = "image"
 
             if track_name and artist:
                 _search_spotify_canvas(track_name, artist, track_id)
         else:
-            with _lock:
-                prev_local = _current_data.get("album_art_local", "")
-                prev_color = _current_data.get("dominant_color", "#1a1a2e")
-                track_changed_at = _current_data.get("track_changed_at", 0)
-            if prev_local:
-                local_art = prev_local.replace("/art/", "")
-            else:
-                local_art = cache_art(art_url) if art_url else ""
-            color = prev_color if prev_color != "#1a1a2e" else (
-                get_dominant_color(art_url) if art_url else "#1a1a2e"
-            )
+            local_art_path = prev_local
+            color = prev_color
+            track_changed_at = prev_changed_at
 
         with _lock:
             _current_data.update({
@@ -334,7 +376,7 @@ def _do_poll():
                 "track": track_name,
                 "album": album_name,
                 "album_art_url": art_url,
-                "album_art_local": ("/art/" + local_art) if local_art else "",
+                "album_art_local": local_art_path,
                 "dominant_color": color,
                 "progress_ms": progress_ms,
                 "duration_ms": duration_ms,
@@ -345,6 +387,11 @@ def _do_poll():
                 "server_time": now,
                 "track_changed_at": track_changed_at,
             })
+            if track_changed:
+                _previous_track_id = track_id
+
+        if art_url and (track_changed or not local_art_path):
+            _spawn_art_cache(track_id, art_url)
 
         scrobbler_update(track_id, track_name, artist, duration_ms, is_playing, progress_ms)
 
