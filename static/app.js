@@ -74,8 +74,8 @@
 
   var prevRenderedArtKey  = "";
   var artLoadToken        = 0;
-  var prevRenderedTitle   = "";
-  var prevRenderedArtist  = "";
+  var prevRenderedTitle   = null;
+  var prevRenderedArtist  = null;
   var prevRenderedDevice  = "";
   var prevRenderedPlaying = null;
   var prevTimeCurText     = "";
@@ -94,6 +94,9 @@
   var visualMode = "canvas_card";
   var artworkWrap = $("#artwork-wrap");
   var idleScreensaverActive = false;
+  var idleScreensaverDismissed = false;
+  var idleInactivityTimer = null;
+  var IDLE_RETURN_MS = 15000;
 
   var barWidth = dom.bar.offsetWidth;
   if (window.ResizeObserver) {
@@ -365,6 +368,50 @@
     artworkWrap.appendChild(dom.canvas);
   }
 
+  /* Tap/click during the idle screensaver: dismiss it, kill the canvas,
+     and fall back to the normal "No music playing" idle chrome.
+     Stays dismissed until either a track plays, the inactivity timer
+     fires (15s), or the user taps the artwork to bring it back. */
+  function dismissIdleScreensaver() {
+    if (!idleScreensaverActive) return;
+    idleScreensaverDismissed = true;
+    idleScreensaverActive = false;
+    document.body.classList.remove("idle-screensaver");
+    clearCanvas();
+    armIdleInactivity();
+  }
+
+  /* Bring the idle screensaver back (tap-on-artwork or 15s inactivity). */
+  function reactivateIdleScreensaver() {
+    if (state.track_id) return;              // track is playing, skip
+    if (!state.idle_canvas_url) return;      // nothing cached yet, nothing to show
+    idleScreensaverDismissed = false;
+    idleScreensaverActive = true;
+    disarmIdleInactivity();
+    document.body.classList.add("idle-screensaver");
+    if (!canvasMode && visualMode !== "canvas_bg") enterCinematic();
+    applyCanvas(state.idle_canvas_url, state.idle_canvas_cdn_url || null, "canvas_video");
+  }
+
+  function armIdleInactivity() {
+    disarmIdleInactivity();
+    idleInactivityTimer = setTimeout(function () {
+      idleInactivityTimer = null;
+      /* Only re-engage if we're still idle-and-dismissed; a track starting
+         or the server losing the idle canvas should cancel the return. */
+      if (idleScreensaverDismissed && !state.track_id) {
+        reactivateIdleScreensaver();
+      }
+    }, IDLE_RETURN_MS);
+  }
+
+  function disarmIdleInactivity() {
+    if (idleInactivityTimer) {
+      clearTimeout(idleInactivityTimer);
+      idleInactivityTimer = null;
+    }
+  }
+
   function syncBackgroundMode() {
     if (canvasMode) return;
     if (visualMode === "canvas_bg") {
@@ -543,10 +590,17 @@
           exitCinematic();
         }
 
-        /* Idle screensaver: no active track + we have an idle canvas cached */
+        /* Idle screensaver: no active track + we have an idle canvas cached.
+           If a track starts, clear any "dismissed" flag + cancel the
+           15s return timer so the screensaver can come back cleanly
+           the next idle period. */
         var isIdle = !data.track_id;
+        if (!isIdle) {
+          idleScreensaverDismissed = false;
+          disarmIdleInactivity();
+        }
         var wasIdle = idleScreensaverActive;
-        idleScreensaverActive = isIdle && !!data.idle_canvas_url;
+        idleScreensaverActive = isIdle && !!data.idle_canvas_url && !idleScreensaverDismissed;
 
         if (idleScreensaverActive) {
           incomingCanvas = data.idle_canvas_url;
@@ -556,6 +610,7 @@
 
         if (idleScreensaverActive && !wasIdle) {
           document.body.classList.add("idle-screensaver");
+          disarmIdleInactivity();
           if (!canvasMode && visualMode !== "canvas_bg") enterCinematic();
         } else if (!idleScreensaverActive && wasIdle) {
           document.body.classList.remove("idle-screensaver");
@@ -725,16 +780,34 @@
     seekLockUntil = performance.now() + INPUT_LOCK_MS;
   });
 
-  /* Click artwork to toggle cinematic mode (not in canvas_bg — already fullscreen) */
+  /* Click artwork:
+       - If the idle screensaver is dismissed and we're still idle, bring it back.
+       - Otherwise, toggle cinematic mode (skipped in canvas_bg — already fullscreen). */
   artworkWrap.addEventListener("click", function (e) {
     e.stopPropagation();
+    if (idleScreensaverDismissed && !state.track_id && state.idle_canvas_url) {
+      reactivateIdleScreensaver();
+      return;
+    }
     if (!canvasMode && visualMode !== "canvas_bg") enterCinematic();
   });
+
+  /* While the screensaver is dismissed-and-idle, any tap or keypress
+     resets the 15s inactivity countdown. Capture phase so it runs even
+     when inner handlers call stopPropagation(). */
+  function onIdleActivity() {
+    if (idleScreensaverDismissed && !state.track_id) {
+      armIdleInactivity();
+    }
+  }
+  document.addEventListener("pointerdown", onIdleActivity, true);
+  document.addEventListener("keydown", onIdleActivity, true);
 
   /* In cinematic: clicking player background exits, clicking controls doesn't */
   dom.player.addEventListener("click", function (e) {
     if (!canvasMode) return;
     if (e.target === dom.player) {
+      dismissIdleScreensaver();
       exitCinematic();
     } else {
       e.stopPropagation();
@@ -743,23 +816,38 @@
 
   /* Click the fullscreen canvas video to exit */
   dom.canvas.addEventListener("click", function (e) {
-    if (canvasMode) { e.stopPropagation(); exitCinematic(); }
+    if (canvasMode) {
+      e.stopPropagation();
+      dismissIdleScreensaver();
+      exitCinematic();
+    }
   });
 
   /* Click the bg-layer or bg-overlay to exit (artwork-only fullscreen) */
   dom.bg.addEventListener("click", function (e) {
-    if (canvasMode) { e.stopPropagation(); exitCinematic(); }
+    if (canvasMode) {
+      e.stopPropagation();
+      dismissIdleScreensaver();
+      exitCinematic();
+    }
   });
   var bgOverlay = $("#bg-overlay");
   if (bgOverlay) {
     bgOverlay.addEventListener("click", function (e) {
-      if (canvasMode) { e.stopPropagation(); exitCinematic(); }
+      if (canvasMode) {
+        e.stopPropagation();
+        dismissIdleScreensaver();
+        exitCinematic();
+      }
     });
   }
 
   /* Fallback: click body to exit */
   document.body.addEventListener("click", function () {
-    if (canvasMode) exitCinematic();
+    if (canvasMode) {
+      dismissIdleScreensaver();
+      exitCinematic();
+    }
   });
 
   /* ── Rotary encoder (global keyboard) ──────────────────── */

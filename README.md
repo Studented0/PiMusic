@@ -82,9 +82,20 @@ Before searching, track names are normalized — stripping `(feat. ...)`, `(ft. 
 
 ### Idle Canvas Screensaver
 
-When there's no active track (Spotify fully closed or nothing playing on Cider), the display isn't left blank — a pre-picked Canvas video takes over as a screensaver. The idle UI ("No music playing" + dimmed artwork frame) stays visible on top, and the display auto-enters cinematic mode so the video is fullscreen.
+When nothing's playing, PiMusic doesn't just sit on a dead screen. A pre-picked Canvas video takes over as a fullscreen screensaver, with just the source toggle, settings gear, and a clean "No music playing" label on top — nothing else. Default canvas is **Stick Talk by Future**.
 
-By default the screensaver uses the Canvas for **Stick Talk by Future**. To change it or add more to rotate through, edit this list at the top of `spotify_controller.py`:
+**Dismiss and return**
+
+- Tap anywhere on the screen → screensaver fades out, regular idle UI comes back with all the buttons (play/pause, skip, volume, progress bar).
+- Tap the album artwork area → screensaver comes right back.
+- Don't touch anything for 15 seconds → screensaver comes back on its own.
+- Play a track → screensaver exits for good until you stop playing again.
+
+Every touch or encoder press resets the 15-second countdown, so the screensaver won't yank you away while you're actually using the UI.
+
+**Changing the screensaver**
+
+Edit this list at the top of `spotify_controller.py`:
 
 ```python
 IDLE_CANVAS_TRACK_IDS = [
@@ -93,9 +104,9 @@ IDLE_CANVAS_TRACK_IDS = [
 ]
 ```
 
-To get a track's Spotify ID, open the track in Spotify → right-click → Share → Copy Song Link. The ID is the 22-character string after `/track/` in the URL (before the `?si=...` part).
+To grab a track's Spotify ID: open the track in Spotify → right-click → Share → Copy Song Link. The ID is the 22-character string after `/track/` in the URL, before the `?si=...` part.
 
-The server pre-fetches all listed canvases on startup, so they're ready the instant the screensaver kicks in. Only tracks that actually have a Canvas will work — if a track has no Canvas, Spotify returns nothing and PiMusic will skip it. Right now PiMusic uses the first available entry; when you add more, rotation between them can be added later without touching the web UI.
+The server pre-fetches every listed canvas on startup, so the screensaver shows up the instant it's needed. Only tracks with an actual Canvas work — if Spotify returns nothing, PiMusic just skips that ID. Today it uses the first available entry; adding rotation between multiple canvases later is a straightforward swap in `get_idle_canvas()`.
 
 ---
 
@@ -368,7 +379,7 @@ PiMusic/
 
 A pile of reliability work on top of v2.0:
 
-- **Idle canvas screensaver** — When nothing is playing, the display shows a pre-picked Canvas video fullscreen instead of sitting on a dead "No music playing" screen. Configurable list of track IDs, pre-fetched on startup.
+- **Idle canvas screensaver** — When nothing is playing, the display shows a pre-picked Canvas video fullscreen instead of sitting on a dead "No music playing" screen. Minimal UI (source toggle + settings gear + label, no buttons or progress bar cluttering it). Tap to dismiss back to the normal idle UI, tap the artwork to bring it back, or let 15 seconds of inactivity return it automatically. Configurable list of track IDs, pre-fetched on startup.
 - **Rotary encoder support** — Pro Micro firmware and web-side keydown handling for volume, play/pause, next, previous, and opening settings. Settings page is fully navigable with just the encoder.
 - **Canvas reliability** — Bounded per-track URL cache, deduplicated in-flight CDN downloads, token refresh on both 401 and 403, and Chrome TLS impersonation via `curl_cffi` for the CDN fetch (Spotify's CDN fingerprints clients).
 - **Album art race fixes** — Art caching moved off the poll thread, atomic file writes, client-side token guard so a slow image load can't overwrite newer state, and an on-disk quota that prunes to 200 MB.

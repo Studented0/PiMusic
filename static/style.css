@@ -759,3 +759,33 @@ select.settings-input option {
 
   .status-bar         { font-size: 15px; padding: 12px 18px; }
 }
+
+/* ══════════════════════════════════════════════════════════
+   Idle screensaver — minimal UI on top of the idle canvas.
+   Only the source toggle, settings link, and "No music playing"
+   text remain. All background darkening is removed.
+   ══════════════════════════════════════════════════════════ */
+
+body.idle-screensaver.canvas-cinematic::after { display: none !important; }
+body.idle-screensaver .bg-overlay             { display: none !important; }
+
+body.idle-screensaver #device-badge,
+body.idle-screensaver .artwork-wrap,
+body.idle-screensaver .progress-wrap,
+body.idle-screensaver .controls,
+body.idle-screensaver .volume-wrap,
+body.idle-screensaver .track-artist {
+  display: none !important;
+}
+
+body.idle-screensaver .track-info {
+  text-align: center;
+  padding: 0 0 28px;
+}
+body.idle-screensaver .track-title {
+  text-align: center;
+  letter-spacing: .5px;
+  /* Single soft shadow only — avoids the rectangular halo that the
+     default cinematic double-shadow creates over light backgrounds. */
+  text-shadow: 0 2px 14px rgba(0,0,0,.55);
+}
