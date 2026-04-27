@@ -4,3 +4,8 @@ art_cache/
 *.pyc
 .spotify_cache
 node_modules/
+server.log
+server.prev.log
+server_*.log
+.claude/
+.vercel/
