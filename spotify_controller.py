@@ -188,11 +188,13 @@ def _fetch_canvas_graphql(track_id):
         except Exception as e:
             print("Canvas error for " + track_id + ": " + str(e))
 
-        with _lock:
-            if _current_data.get("track_id") != track_id:
-                return
+        # Always cache the result (even if the active track moved on, future
+        # plays of this track and the idle screensaver still need it).
         _canvas_cache_store(track_id, cdn_url)
-        _apply_canvas(track_id)
+        with _lock:
+            still_current = _current_data.get("track_id") == track_id
+        if still_current:
+            _apply_canvas(track_id)
 
     t = threading.Thread(target=_work, daemon=True)
     t.start()
