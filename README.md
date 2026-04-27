@@ -148,11 +148,13 @@ DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars --disable-smooth-s
 **Windows autostart (optional):** `start-pimusic-hidden.vbs` launches the server silently at login. `debug-pimusic.bat` kills it and opens a visible console. `view-log.bat` tails the log.
 
 ---
+
 ## Headaches/things to fix
 
 1. App is slow to update sometimes (not a dealbreaker only a couple seconds)
 2. Scrobbler goes to 0 when you pause then updates to the right timestamp
 3. Volume is janky to update and does not update in realtime
+
 ## Project Structure
 
 ```
