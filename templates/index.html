@@ -4,9 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <title>PiMusic</title>
-  <link rel="stylesheet8" href="/static/style.css?v=46">
+  <link rel="stylesheet" href="/static/style.css?v=47">
 </head>
 <body>
+  {% if demo_mode %}<div class="demo-banner">DEMO MODE</div>{% endif %}
   <!-- Full-screen blurred background layer -->
   <div id="bg-layer" class="bg-layer"></div>
   <div id="bg-overlay" class="bg-overlay"></div>
@@ -78,6 +79,6 @@
     </div>
   </main>
 
-  <script src="/static/app.js?v=46"></script>
+  <script src="/static/app.js?v=47"></script>
 </body>
 </html>

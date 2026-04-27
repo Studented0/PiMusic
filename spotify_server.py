@@ -12,6 +12,8 @@ from flask import Flask, Response, jsonify, render_template, request, send_from_
 import requests as http_requests
 from curl_cffi import requests as cffi_requests
 
+DEMO_MODE = os.getenv("DEMO_MODE", "").strip().lower() in ("1", "true", "yes", "on")
+
 from spotify_auth import (
     get_spotify_client, SP_DC, CLIENT_ID, REDIRECT_URI,
     start_wp_token_refresh, force_reauth, get_account_info,
@@ -27,16 +29,19 @@ from album_cache import prune_art_cache
 import cider_controller
 import source_manager
 import resource_monitor
+import demo_state
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ART_DIR = os.path.join(BASE_DIR, "art_cache")
+DEMO_DIR = os.path.join(BASE_DIR, "static", "demo")
 SETTINGS_PATH = os.path.expanduser("~/pimusic/settings.json")
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 
-sp = get_spotify_client()
+sp = None if DEMO_MODE else get_spotify_client()
 
 
 # ── Settings persistence ─────────────────────────────────
@@ -93,12 +98,12 @@ def _apply_settings():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", demo_mode=DEMO_MODE)
 
 
 @app.route("/settings")
 def settings_page():
-    return render_template("settings.html")
+    return render_template("settings.html", demo_mode=DEMO_MODE)
 
 
 # ── Unified state API ────────────────────────────────────
@@ -106,6 +111,8 @@ def settings_page():
 @app.route("/api/state")
 @app.route("/api/current")
 def api_state():
+    if DEMO_MODE:
+        return jsonify(demo_state.get_state())
     cpu_throttle = resource_monitor.should_disable_video()
     data = source_manager.get_unified_state(cpu_override_image=cpu_throttle)
 
@@ -137,16 +144,22 @@ def api_state():
 
 @app.route("/api/play", methods=["POST"])
 def api_play():
+    if DEMO_MODE:
+        return jsonify({"ok": demo_state.set_playing(True)})
     return jsonify({"ok": source_manager.dispatch_command("play", sp=sp)})
 
 
 @app.route("/api/pause", methods=["POST"])
 def api_pause():
+    if DEMO_MODE:
+        return jsonify({"ok": demo_state.set_playing(False)})
     return jsonify({"ok": source_manager.dispatch_command("pause", sp=sp)})
 
 
 @app.route("/api/next", methods=["POST"])
 def api_next():
+    if DEMO_MODE:
+        return jsonify({"ok": demo_state.next_track()})
     ok = source_manager.dispatch_command("next", sp=sp)
     if ok and source_manager.get_active_source() == "spotify":
         force_poll()
@@ -155,6 +168,8 @@ def api_next():
 
 @app.route("/api/previous", methods=["POST"])
 def api_previous():
+    if DEMO_MODE:
+        return jsonify({"ok": demo_state.previous_track()})
     ok = source_manager.dispatch_command("previous", sp=sp)
     if ok and source_manager.get_active_source() == "spotify":
         force_poll()
@@ -165,6 +180,8 @@ def api_previous():
 def api_seek():
     data = request.get_json(silent=True) or {}
     pos = data.get("position_ms", 0)
+    if DEMO_MODE:
+        return jsonify({"ok": demo_state.seek(int(pos))})
     return jsonify({
         "ok": source_manager.dispatch_command("seek", sp=sp, position_ms=int(pos))
     })
@@ -174,6 +191,8 @@ def api_seek():
 def api_volume():
     data = request.get_json(silent=True) or {}
     vol = data.get("volume", 50)
+    if DEMO_MODE:
+        return jsonify({"ok": demo_state.set_volume(int(vol))})
     return jsonify({
         "ok": source_manager.dispatch_command("volume", sp=sp, volume=int(vol))
     })
@@ -181,6 +200,8 @@ def api_volume():
 
 @app.route("/api/force-poll", methods=["POST"])
 def api_force_poll():
+    if DEMO_MODE:
+        return jsonify({"ok": True})
     force_poll()
     return jsonify({"ok": True})
 
@@ -211,6 +232,19 @@ def _canvas_mp4_headers():
 def serve_canvas_proxy(filename):
     """Stream canvas MP4 from RAM cache, fetching from CDN on first request."""
     track_id = filename.replace(".mp4", "")
+
+    if DEMO_MODE:
+        local = demo_state.get_canvas_file(track_id)
+        if local:
+            return send_from_directory(
+                os.path.dirname(local), os.path.basename(local),
+                mimetype="video/mp4",
+            )
+        cdn = demo_state.get_canvas_cdn(track_id)
+        if cdn:
+            from flask import redirect
+            return redirect(cdn, code=302)
+        return Response("not found", status=404)
 
     with _canvas_ram_lock:
         if track_id in _canvas_bytes_cache:
@@ -289,6 +323,8 @@ def serve_canvas_proxy(filename):
 @app.route("/api/clear-cache", methods=["POST"])
 def api_clear_cache():
     """Delete all files in art_cache/ (album art JPEGs)."""
+    if DEMO_MODE:
+        return jsonify({"ok": True, "removed": 0})
     removed = 0
     try:
         if os.path.isdir(ART_DIR):
@@ -307,6 +343,8 @@ def api_clear_cache():
 
 @app.route("/api/source", methods=["GET"])
 def api_get_source():
+    if DEMO_MODE:
+        return jsonify({"source": demo_state.get_state()["source"]})
     return jsonify({"source": source_manager.get_active_source()})
 
 
@@ -314,6 +352,9 @@ def api_get_source():
 def api_set_source():
     data = request.get_json(silent=True) or {}
     src = data.get("source", "")
+    if DEMO_MODE:
+        ok = demo_state.set_source(src)
+        return jsonify({"ok": ok, "source": demo_state.get_state()["source"]})
     ok = source_manager.set_source(src)
     return jsonify({"ok": ok, "source": source_manager.get_active_source()})
 
@@ -326,6 +367,21 @@ def api_hid_input():
     action = data.get("action", "")
     if not action:
         return jsonify({"ok": False, "error": "missing action"}), 400
+
+    if DEMO_MODE:
+        if action == "play":
+            return jsonify({"ok": demo_state.set_playing(True)})
+        if action == "pause":
+            return jsonify({"ok": demo_state.set_playing(False)})
+        if action == "next":
+            return jsonify({"ok": demo_state.next_track()})
+        if action == "previous":
+            return jsonify({"ok": demo_state.previous_track()})
+        if action == "volume":
+            return jsonify({"ok": demo_state.set_volume(int(data.get("value", 50)))})
+        if action == "seek":
+            return jsonify({"ok": demo_state.seek(int(data.get("position_ms", 0)))})
+        return jsonify({"ok": True})
 
     kwargs = {}
     if action == "volume":
@@ -385,12 +441,16 @@ def api_set_settings():
 
 @app.route("/api/force-reauth", methods=["POST"])
 def api_force_reauth():
+    if DEMO_MODE:
+        return jsonify({"ok": True, "message": "Demo mode — no auth to refresh"})
     force_reauth()
     return jsonify({"ok": True, "message": "Cache cleared, token refresh started"})
 
 
 @app.route("/api/spotify/reauth", methods=["POST"])
 def api_spotify_reauth():
+    if DEMO_MODE:
+        return jsonify({"ok": True, "account": "demo@pimusic.local"})
     print("[Spotify Auth] Re-auth triggered via API")
     force_reauth()
     try:
@@ -407,6 +467,8 @@ def api_spotify_reauth():
 
 @app.route("/api/system/cpu", methods=["GET"])
 def api_cpu():
+    if DEMO_MODE:
+        return jsonify({"cpu_percent": 12.0, "video_disabled": False, "threshold": 75})
     return jsonify({
         "cpu_percent": resource_monitor.get_cpu_percent(),
         "video_disabled": resource_monitor.should_disable_video(),
@@ -417,59 +479,68 @@ def api_cpu():
 # ── Startup ──────────────────────────────────────────────
 
 if __name__ == "__main__":
-    _apply_settings()
-
-    if SP_DC:
-        print(f"SP_DC loaded ({SP_DC[:8]}...)")
-        print("Capturing web player token (Chromium will flash briefly)...")
-        start_wp_token_refresh()
+    if DEMO_MODE:
+        print("=" * 60)
+        print("  PiMusic DEMO MODE — Spotify and Cider are disabled.")
+        print("  /api/state returns a hardcoded playlist with live progress.")
+        print("  Drop MP4/JPG files in static/demo/ to customize.")
+        print("=" * 60)
+        print("PiMusic server running on http://0.0.0.0:5000")
+        app.run(host="0.0.0.0", port=5000, debug=False)
     else:
-        print("WARNING: SP_DC not set in .env -- Canvas will not work")
+        _apply_settings()
 
-    print("Starting Spotify poller ...")
-    start_polling(sp)
+        if SP_DC:
+            print(f"SP_DC loaded ({SP_DC[:8]}...)")
+            print("Capturing web player token (Chromium will flash briefly)...")
+            start_wp_token_refresh()
+        else:
+            print("WARNING: SP_DC not set in .env -- Canvas will not work")
 
-    print("Pre-warming idle screensaver canvas...")
-    prewarm_idle_canvas()
+        print("Starting Spotify poller ...")
+        start_polling(sp)
 
-    try:
-        account = get_account_info()
-        print(f"[Spotify Auth] Authenticated as: {account}")
-    except Exception:
-        print("[Spotify Auth] Could not retrieve account info")
+        print("Pre-warming idle screensaver canvas...")
+        prewarm_idle_canvas()
 
-    cider_controller.set_spotify_client(sp)
+        try:
+            account = get_account_info()
+            print(f"[Spotify Auth] Authenticated as: {account}")
+        except Exception:
+            print("[Spotify Auth] Could not retrieve account info")
 
-    if _settings.get("cider_token") or cider_controller.is_available():
-        print("Starting Cider poller ...")
-        cider_controller.start_polling()
-    else:
-        print("Cider not available at startup – will retry in background")
-        def _cider_retry_loop():
-            import time as _t
+        cider_controller.set_spotify_client(sp)
+
+        if _settings.get("cider_token") or cider_controller.is_available():
+            print("Starting Cider poller ...")
+            cider_controller.start_polling()
+        else:
+            print("Cider not available at startup – will retry in background")
+            def _cider_retry_loop():
+                import time as _t
+                while True:
+                    _t.sleep(10)
+                    if cider_controller.is_available():
+                        print("Cider became available – starting poller")
+                        cider_controller.start_polling()
+                        break
+            threading.Thread(target=_cider_retry_loop, daemon=True).start()
+
+        source_manager.start_detection()
+        resource_monitor.start()
+
+        def _art_prune_daemon():
+            time.sleep(3)
             while True:
-                _t.sleep(10)
-                if cider_controller.is_available():
-                    print("Cider became available – starting poller")
-                    cider_controller.start_polling()
-                    break
-        threading.Thread(target=_cider_retry_loop, daemon=True).start()
+                try:
+                    n = prune_art_cache()
+                    if n:
+                        print(f"Art cache prune: removed {n} oldest file(s)")
+                except Exception as e:
+                    print(f"Art cache prune error: {e}")
+                time.sleep(3600)
 
-    source_manager.start_detection()
-    resource_monitor.start()
+        threading.Thread(target=_art_prune_daemon, daemon=True).start()
 
-    def _art_prune_daemon():
-        time.sleep(3)
-        while True:
-            try:
-                n = prune_art_cache()
-                if n:
-                    print(f"Art cache prune: removed {n} oldest file(s)")
-            except Exception as e:
-                print(f"Art cache prune error: {e}")
-            time.sleep(3600)
-
-    threading.Thread(target=_art_prune_daemon, daemon=True).start()
-
-    print("PiMusic server running on http://0.0.0.0:5000")
-    app.run(host="0.0.0.0", port=5000, debug=False)
+        print("PiMusic server running on http://0.0.0.0:5000")
+        app.run(host="0.0.0.0", port=5000, debug=False)
