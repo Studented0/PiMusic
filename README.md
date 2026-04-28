@@ -30,11 +30,15 @@ The case is a simple Pi 3B+ case with a 17 degree wedge stand, made in SOLIDWORK
 ---
 
 ## How Canvas works
-Canvas does not have a public API, so with reverse engineering of Spotify’s internal GraphQL endpoint we get our own API. Playwright captures auth tokens from a Spotify web player by opening a real chromium window in the background. Tokens are cycled around every 50 mins. Spotify’s CDN fingerprints TLS clients, so Python requests get blocked. To bypass this curl_cffi with Chrome131 impersonation gets past it. When on Apple Music, same system is used but with looking up the Apple Music track name and pulling the Canvas if track has Canvas. 
+
+Canvas does not have a public API, so with reverse engineering of Spotify’s internal GraphQL endpoint we get our own API. Playwright captures auth tokens from a Spotify web player by opening a real chromium window in the background. Tokens are cycled around every 50 mins. Spotify’s CDN fingerprints TLS clients, so Python requests get blocked. To bypass this curl_	
+cffi with Chrome131 impersonation gets past it. When on Apple Music, same system is used but with looking up the Apple Music track name and pulling the Canvas if track has Canvas. 
+
 ---
 ## Software
 
 Flask server on PC handles Spotify polling, Canvas fetching, Apple Music by using Cider (3rd party Apple Music desktop app), Album art caching, and just gives everything to the Pi over the network.
+
 ---
 ## Headaches/things to fix
 
