@@ -26,6 +26,8 @@ An EC11 encoder is wired to a SparkFun Pro Micro ATmega32U4, the Pro Micro shows
 
 The case is a simple Pi 3B+ case with a 17 degree wedge stand, made in SOLIDWORKS. All of it prints in one piece. Separate enclosure for the encoder and pro micro also made in SOLIDWORKS.
 <img width="453" height="357" alt="image" src="https://github.com/user-attachments/assets/c657c5ea-9ae9-4fb8-a104-cd9228317261" />
+<img width="3507" height="2480" alt="image" src="https://github.com/user-attachments/assets/b52acbfe-2471-451b-ab0d-e20a23723682" />
+
 
 ---
 
