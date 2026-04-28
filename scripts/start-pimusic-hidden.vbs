@@ -2,7 +2,8 @@ Dim fso, shell, projDir, oldLog, prevLog
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 
-projDir = fso.GetParentFolderName(WScript.ScriptFullName)
+' This script lives in scripts/, so projDir is its parent's parent (repo root).
+projDir = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 oldLog = projDir & "\server.log"
 prevLog = projDir & "\server.prev.log"
 
@@ -19,4 +20,4 @@ If fso.FileExists(oldLog) Then
 End If
 
 ' Start the server hidden
-shell.Run "cmd /c cd /d """ & projDir & """ && python -u spotify_server.py > server.log 2>&1", 0, False
+shell.Run "cmd /c cd /d """ & projDir & """ && python -u server\spotify_server.py > server.log 2>&1", 0, False

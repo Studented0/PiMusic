@@ -31,12 +31,16 @@ import source_manager
 import resource_monitor
 import demo_state
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root (server/ -> ..)
 ART_DIR = os.path.join(BASE_DIR, "art_cache")
 DEMO_DIR = os.path.join(BASE_DIR, "static", "demo")
 SETTINGS_PATH = os.path.expanduser("~/pimusic/settings.json")
 
-app = Flask(__name__, static_folder="static", template_folder="templates")
+app = Flask(
+    __name__,
+    static_folder=os.path.join(BASE_DIR, "static"),
+    template_folder=os.path.join(BASE_DIR, "templates"),
+)
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 

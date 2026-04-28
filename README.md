@@ -136,7 +136,7 @@ SP_DC=your_sp_dc_cookie
 Start the server:
 
 ```bash
-python spotify_server.py
+python server/spotify_server.py
 ```
 
 On the Pi:
@@ -145,7 +145,7 @@ On the Pi:
 DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars --disable-smooth-scrolling http://<your-pc-ip>:5000
 ```
 
-**Windows autostart (optional):** `start-pimusic-hidden.vbs` launches the server silently at login. `debug-pimusic.bat` kills it and opens a visible console. `view-log.bat` tails the log.
+**Windows autostart (optional):** `scripts/start-pimusic-hidden.vbs` launches the server silently at login. `scripts/debug-pimusic.bat` kills it and opens a visible console. `scripts/view-log.bat` tails the log.
 
 ---
 
@@ -159,32 +159,40 @@ DISPLAY=:0 chromium --kiosk --noerrdialogs --disable-infobars --disable-smooth-s
 
 ```
 PiMusic/
-├── spotify_server.py        # Flask server, routes, canvas proxy
-├── spotify_controller.py    # Spotify polling, Canvas GraphQL fetch, idle screensaver
-├── spotify_auth.py          # Spotipy OAuth, Playwright token capture
-├── cider_controller.py      # Apple Music via Cider, Canvas cross-lookup
-├── source_manager.py        # Source switching
-├── scrobbler.py             # Scrobble logging
-├── resource_monitor.py      # CPU monitoring
-├── album_cache.py           # Album art download, atomic writes, quota pruning
-├── requirements.txt
-├── BOM.csv
-├── .env.example
-├── start-pimusic-hidden.vbs
-├── debug-pimusic.bat
-├── view-log.bat
+├── server/                  # Flask server + all backend modules
+│   ├── spotify_server.py    # Flask routes, canvas proxy, demo-mode wiring
+│   ├── spotify_controller.py # Spotify polling, Canvas GraphQL fetch, idle screensaver
+│   ├── spotify_auth.py      # Spotipy OAuth, Playwright token capture
+│   ├── cider_controller.py  # Apple Music via Cider, Canvas cross-lookup
+│   ├── source_manager.py    # Source switching
+│   ├── scrobbler.py         # Scrobble logging
+│   ├── resource_monitor.py  # CPU monitoring
+│   ├── album_cache.py       # Album art download, atomic writes, quota pruning
+│   └── demo_state.py        # Hardcoded playlist for DEMO_MODE / Vercel
+├── api/                     # Vercel serverless entry (lean Flask, no heavy deps)
+│   ├── index.py
+│   └── requirements.txt
 ├── static/
 │   ├── app.js               # Polling, rendering, controls, encoder keydown handling
 │   ├── style.css
-│   └── settings.js
+│   ├── settings.js
+│   └── demo/                # Demo-mode playlist + assets
 ├── templates/
 │   ├── index.html
 │   └── settings.html
+├── scripts/                 # Helper scripts (autostart + CLI tooling)
+│   ├── start-pimusic-hidden.vbs # Windows autostart (rotates server.log, runs hidden)
+│   ├── debug-pimusic.bat    # Stop autostart task, run server in a visible console
+│   ├── view-log.bat         # Tail server.log
+│   └── build_demo_playlist.py # Build static/demo/playlist.json from Spotify URLs
 ├── firmware/
 │   └── pimusic_encoder/
-├── canvas-finder/
-├── CAD/
-└── renders/
+├── CAD/                     # Mechanical CAD, renders, BOM
+│   ├── BOM.csv
+│   └── renders/
+├── vercel.json
+├── requirements.txt
+└── .env.example
 ```
 
 ---

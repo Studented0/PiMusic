@@ -1,2 +1,18 @@
-canvas-finder/Cargo.lock linguist-generated
-canvas-finder/** linguist-vendored
+# Normalize source files to LF in the repo (Windows working tree can stay
+# CRLF if Git's autocrlf is set; this just keeps the index clean).
+*.py    text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+
+# Tell GitHub Linguist not to count binary/asset files as the project's
+# primary language.
+CAD/**           linguist-vendored
+firmware/**      linguist-vendored
+renders/**       linguist-vendored
+static/demo/**   linguist-vendored

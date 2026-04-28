@@ -1,7 +1,7 @@
 """Generate static/demo/playlist.json from a list of Spotify track URLs.
 
-Usage (PowerShell):
-    python build_demo_playlist.py `
+Usage (PowerShell, from the repo root):
+    python scripts/build_demo_playlist.py `
       "https://open.spotify.com/track/2X485T9Z5Ll0iQDZpX4TZS" `
       "https://open.spotify.com/track/20fAoPjfYltmd3K3bO7gbt"
 
@@ -25,18 +25,21 @@ import dotenv
 
 dotenv.load_dotenv()
 
+# This script lives in scripts/; the repo root is one directory up.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_SERVER = os.path.join(_REPO_ROOT, "server")
+if _SERVER not in sys.path:
+    sys.path.insert(0, _SERVER)
+
 try:
     from spotify_auth import get_spotify_client, start_wp_token_refresh, get_web_player_tokens
     from spotify_controller import _canvas_graphql_request
 except ImportError as exc:
-    print(f"ERROR: this script has to run from the PiMusic repo root ({exc})")
+    print(f"ERROR: could not import server modules ({exc})")
     sys.exit(1)
 
 
-OUTPUT_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "static", "demo", "playlist.json",
-)
+OUTPUT_PATH = os.path.join(_REPO_ROOT, "static", "demo", "playlist.json")
 
 
 def _slug(text):

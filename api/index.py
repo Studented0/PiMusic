@@ -15,12 +15,13 @@ feels identical.
 import os
 import sys
 
-# Add the repo root to sys.path so we can import demo_state, regardless of
+# Add server/ to sys.path so we can import demo_state, regardless of
 # where Vercel drops the working directory.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
-if _ROOT not in sys.path:
-    sys.path.insert(0, _ROOT)
+_SERVER = os.path.join(_ROOT, "server")
+if _SERVER not in sys.path:
+    sys.path.insert(0, _SERVER)
 
 from flask import (
     Flask, Response, jsonify, redirect, render_template,
