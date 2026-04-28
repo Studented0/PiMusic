@@ -1,4 +1,4 @@
-PiMusic
+## PiMusic
 A desk display for Spotify and Apple Music. Built with a Raspberry Pi 3B+ and a HyperPixel 4.0 touchscreen. Shows what's playing, Spotify Canvas videos as backgrounds, and lets you control playback with a rotary encoder.
 
 ---
