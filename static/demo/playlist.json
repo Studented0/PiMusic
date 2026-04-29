@@ -9,6 +9,7 @@
     "canvas_cdn_url": "",
     "canvas_local": "canvas-houstonfornication.mp4",
     "art_local": "album-houstonfornication.jpg",
+    "audio_local": "audio-houstonfornication.m4a",
     "dominant_color": "#99a7ac"
   },
   {
@@ -21,6 +22,7 @@
     "canvas_cdn_url": "",
     "canvas_local": "canvas-black-beatles.mp4",
     "art_local": "album-black-beatles.jpg",
+    "audio_local": "audio-black-beatles.m4a",
     "dominant_color": "#241817"
   },
   {
@@ -33,6 +35,7 @@
     "canvas_cdn_url": "https://canvaz.scdn.co/upload/artist/4Gso3d4CscCijv0lmajZWs/video/238fa13897df479ca72b438602427e9b.cnvs.mp4",
     "canvas_local": "canvas-you-feat-travis-scott.mp4",
     "art_local": "album-you-feat-travis-scott.jpg",
+    "audio_local": "audio-you-feat-travis-scott.m4a",
     "dominant_color": "#0d0707"
   },
   {
@@ -45,6 +48,7 @@
     "canvas_cdn_url": "https://canvaz.scdn.co/upload/artist/1RyvyyTE3xzB2ZywiAwp0i/video/4c9cbe2ef3554e8a85dcf138409144ed.cnvs.mp4",
     "canvas_local": "canvas-stick-talk.mp4",
     "art_local": "album-stick-talk.jpg",
+    "audio_local": "audio-stick-talk.m4a",
     "dominant_color": "#c4bcbe"
   },
   {
@@ -57,6 +61,7 @@
     "canvas_cdn_url": "",
     "canvas_local": "canvas-let-it-happen.mp4",
     "art_local": "album-let-it-happen.jpg",
+    "audio_local": "audio-let-it-happen.m4a",
     "dominant_color": "#261f2a"
   },
   {
@@ -69,6 +74,7 @@
     "canvas_cdn_url": "https://canvaz.scdn.co/upload/licensor/7JGwF0zhX9oItt9901OvB5/video/b05e5511a78c4fc3a2247e433f1f744b.cnvs.mp4",
     "canvas_local": "canvas-annihilate-spider-man-across-the-spider-verse-metro-boomin-swae-lee-lil-wayne-offset.mp4",
     "art_local": "album-annihilate-spider-man-across-the-spider-verse-metro-boomin-swae-lee-lil-wayne-offset.jpg",
+    "audio_local": "audio-annihilate-spider-man-across-the-spider-verse-metro-boomin-swae-lee-lil-wayne-offset.m4a",
     "dominant_color": "#060606"
   },
   {
@@ -81,6 +87,7 @@
     "canvas_cdn_url": "https://canvaz.scdn.co/upload/licensor/5kgx3oQfJXzCgpmpDIfrxL/video/0c987e12a6024b8dbcb76a5ad30e5205.cnvs.mp4",
     "canvas_local": "canvas-keep-steady.mp4",
     "art_local": "album-keep-steady.jpg",
+    "audio_local": "audio-keep-steady.m4a",
     "dominant_color": "#1e190d"
   },
   {
@@ -93,6 +100,7 @@
     "canvas_cdn_url": "",
     "canvas_local": "canvas-luther-with-sza.mp4",
     "art_local": "album-luther-with-sza.jpg",
+    "audio_local": "audio-luther-with-sza.m4a",
     "dominant_color": "#232629"
   },
   {
@@ -105,6 +113,7 @@
     "canvas_cdn_url": "",
     "canvas_local": "canvas-not-you-too-feat-chris-brown.mp4",
     "art_local": "album-not-you-too-feat-chris-brown.jpg",
+    "audio_local": "audio-not-you-too-feat-chris-brown.m4a",
     "dominant_color": "#181a07"
   },
   {
@@ -117,6 +126,7 @@
     "canvas_cdn_url": "https://canvaz.scdn.co/upload/artist/3x3jSlhyv5CiCZDZlaTq0M/video/bf834d3ec8bd4f2492dc5388b220a01a.cnvs.mp4",
     "canvas_local": "canvas-switching-lanes-feat-playboi-carti.mp4",
     "art_local": "album-switching-lanes-feat-playboi-carti.jpg",
+    "audio_local": "audio-switching-lanes-feat-playboi-carti.m4a",
     "dominant_color": "#262c25"
   }
 ]
