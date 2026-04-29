@@ -104,19 +104,34 @@ _PLAYLIST = _load_playlist()
 
 # Fill in any missing optional fields and resolve local-vs-CDN URLs once
 # at import. All of this is cheap — just stat() calls and dict merges.
+# canvas_url is left empty when a track has neither a bundled MP4 nor a
+# CDN URL; the frontend treats empty as "no canvas, show artwork only".
 for _t in _PLAYLIST:
-    _t.setdefault("canvas_cdn_url", _STICK_TALK_CDN)
+    _t.setdefault("canvas_cdn_url", "")
     _t.setdefault("canvas_local", "")
     _t.setdefault("art_local", "")
     _t.setdefault("dominant_color", "#1a1a2e")
-    _t["canvas_url"] = _resolve_canvas(_t["canvas_local"], _t.get("canvas_cdn_url") or _STICK_TALK_CDN)
+    _t["canvas_url"] = _resolve_canvas(_t["canvas_local"], _t.get("canvas_cdn_url") or "")
     _t["album_art_local"] = _resolve_art(_t["art_local"], _t.get("album_art_url", ""))
 
+
+# For the idle screensaver, prefer any track with a real canvas; fall back
+# to Stick Talk so the screensaver always has something to show even if
+# every track in the playlist is canvas-less.
+_IDLE_TRACK = next((t for t in _PLAYLIST if t["canvas_url"]), None)
+
+
+# How long the demo can sit paused before we surface it as "no active
+# device" to the frontend, which is what triggers the idle screensaver.
+IDLE_AFTER_PAUSE_S = 15
 
 _lock = threading.Lock()
 _state = {
     "index": 0,
     "started_at": time.time(),
+    "is_playing": True,
+    "paused_at": 0.0,         # wall-clock time pause began (0 while playing)
+    "pause_progress_ms": 0,   # frozen progress while paused
     "volume": 65,
     "source": "spotify",
     "visual_mode": "canvas_card",
@@ -129,8 +144,18 @@ def _current_track():
 
 def _progress_ms_unlocked():
     t = _current_track()
+    if not _state["is_playing"]:
+        return _state["pause_progress_ms"]
     elapsed = (time.time() - _state["started_at"]) * 1000.0
     return int(elapsed) % t["duration_ms"]
+
+
+def _is_idle_paused_unlocked():
+    return (
+        not _state["is_playing"]
+        and _state["paused_at"] > 0
+        and (time.time() - _state["paused_at"]) > IDLE_AFTER_PAUSE_S
+    )
 
 
 def get_state():
@@ -138,38 +163,56 @@ def get_state():
     with _lock:
         t = _current_track()
         progress = _progress_ms_unlocked()
+        is_playing = _state["is_playing"]
+        idle_paused = _is_idle_paused_unlocked()
+        has_canvas = bool(t["canvas_url"])
+        idle_t = _IDLE_TRACK or t
+        # When paused long enough, drop track_id so the frontend kicks
+        # into idle screensaver mode (matches what real Spotify does
+        # once the device falls inactive).
         return {
-            "track_id": t["track_id"],
-            "track": t["track"],
-            "artist": t["artist"],
-            "album": t["album"],
-            "album_art_url": t["album_art_url"],
-            "album_art_local": t["album_art_local"],
-            "canvas_url": t["canvas_url"],
-            "canvas_cdn_url": t.get("canvas_cdn_url", _STICK_TALK_CDN),
-            "duration_ms": t["duration_ms"],
-            "progress_ms": progress,
-            "is_playing": True,
+            "track_id": "" if idle_paused else t["track_id"],
+            "track": "" if idle_paused else t["track"],
+            "artist": "" if idle_paused else t["artist"],
+            "album": "" if idle_paused else t["album"],
+            "album_art_url": "" if idle_paused else t["album_art_url"],
+            "album_art_local": "" if idle_paused else t["album_art_local"],
+            "canvas_url": "" if idle_paused else t["canvas_url"],
+            "canvas_cdn_url": "" if idle_paused else (t.get("canvas_cdn_url") or ""),
+            "duration_ms": 0 if idle_paused else t["duration_ms"],
+            "progress_ms": 0 if idle_paused else progress,
+            "is_playing": is_playing,
             "volume": _state["volume"],
             "device": "PiMusic Demo",
             "source": _state["source"],
             "server_time": time.time(),
             "track_changed_at": _state["started_at"],
             "visual_mode": _state["visual_mode"],
-            "visual_type": "canvas_video",
+            "visual_type": "canvas_video" if (has_canvas and not idle_paused) else "image",
             "cpu_throttled": False,
             "rate_limited_until": 0,
             "dominant_color": t["dominant_color"],
-            "idle_canvas_track_id": _PLAYLIST[0]["track_id"] if len(_PLAYLIST) == 1 else _PLAYLIST[1]["track_id"],
-            "idle_canvas_url": _PLAYLIST[0]["canvas_url"] if len(_PLAYLIST) == 1 else _PLAYLIST[1]["canvas_url"],
+            "idle_canvas_track_id": idle_t["track_id"],
+            "idle_canvas_url": idle_t["canvas_url"] or _STICK_TALK_CDN,
             "idle_canvas_cdn_url": _STICK_TALK_CDN,
         }
+
+
+def _on_track_change_unlocked():
+    """Called whenever the current track or progress is reset by user
+    interaction. Restarts the idle-pause clock so user activity dismisses
+    the screensaver (the frontend already dismisses on tap, this keeps
+    the backend in sync)."""
+    _state["pause_progress_ms"] = 0
+    if not _state["is_playing"]:
+        _state["paused_at"] = time.time()
 
 
 def next_track():
     with _lock:
         _state["index"] = (_state["index"] + 1) % len(_PLAYLIST)
         _state["started_at"] = time.time()
+        _on_track_change_unlocked()
     return True
 
 
@@ -182,6 +225,7 @@ def previous_track():
         else:
             _state["index"] = (_state["index"] - 1) % len(_PLAYLIST)
             _state["started_at"] = time.time()
+        _on_track_change_unlocked()
     return True
 
 
@@ -189,7 +233,11 @@ def seek(position_ms):
     with _lock:
         t = _current_track()
         pos = max(0, min(int(position_ms), t["duration_ms"] - 1))
-        _state["started_at"] = time.time() - (pos / 1000.0)
+        if _state["is_playing"]:
+            _state["started_at"] = time.time() - (pos / 1000.0)
+        else:
+            _state["pause_progress_ms"] = pos
+            _state["paused_at"] = time.time()
     return True
 
 
@@ -207,8 +255,23 @@ def set_source(source):
         return False
 
 
-def set_playing(_playing):
-    """No-op. is_playing is always true in demo mode per spec."""
+def set_playing(playing):
+    """Toggle play/pause. Pausing freezes progress where it is; resuming
+    picks up from there. Pause also starts the idle-pause clock — after
+    IDLE_AFTER_PAUSE_S of paused silence, get_state() drops the track
+    and the frontend's idle screensaver takes over."""
+    with _lock:
+        playing = bool(playing)
+        if playing == _state["is_playing"]:
+            return True
+        if playing:
+            _state["started_at"] = time.time() - (_state["pause_progress_ms"] / 1000.0)
+            _state["is_playing"] = True
+            _state["paused_at"] = 0.0
+        else:
+            _state["pause_progress_ms"] = _progress_ms_unlocked()
+            _state["is_playing"] = False
+            _state["paused_at"] = time.time()
     return True
 
 
@@ -224,8 +287,10 @@ def get_canvas_file(track_id):
 
 
 def get_canvas_cdn(track_id):
-    """Return the public CDN fallback URL for a track_id."""
+    """Return the public CDN URL for a track_id, or None if the track has no
+    canvas. The Vercel /api/canvas proxy turns None into a 404, which the
+    frontend treats as "give up canvas, show artwork only"."""
     for t in _PLAYLIST:
         if t["track_id"] == track_id:
-            return t.get("canvas_cdn_url") or _STICK_TALK_CDN
+            return t.get("canvas_cdn_url") or None
     return None
