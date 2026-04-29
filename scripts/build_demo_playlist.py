@@ -1,15 +1,21 @@
 """Generate static/demo/playlist.json from a list of Spotify track URLs.
 
-Usage (PowerShell, from the repo root):
-    python scripts/build_demo_playlist.py `
-      "https://open.spotify.com/track/2X485T9Z5Ll0iQDZpX4TZS" `
-      "https://open.spotify.com/track/20fAoPjfYltmd3K3bO7gbt"
+Usage (from the repo root):
+    # Edit static/demo/tracks.txt — one Spotify URL per line — then:
+    python scripts/build_demo_playlist.py
+
+    # Or pass URLs directly:
+    python scripts/build_demo_playlist.py https://open.spotify.com/track/...
 
 It reuses the same credentials the real server uses (.env → SPOTIPY_* and
 SP_DC). For each URL it resolves: title, artist, album, duration, 640px
 album art URL, and — if a Canvas is available — the canvas CDN URL from
-Spotify's GraphQL. The output file is then picked up by demo_state.py
-automatically the next time the server boots.
+Spotify's GraphQL. It then downloads the MP4 + JPG into static/demo/ so
+the Vercel deployment can serve them directly (no CDN round-trip), and
+samples the dominant color from the album art.
+
+Commit static/demo/playlist.json plus the downloaded canvas-*.mp4 and
+album-*.jpg files; Vercel picks them up on the next push.
 
 No canvas? Not a problem. The track still plays, it just falls back to the
 default Stick Talk CDN canvas the same way any of the bundled demos do.
@@ -22,6 +28,7 @@ import sys
 import time
 
 import dotenv
+import requests
 
 dotenv.load_dotenv()
 
@@ -39,13 +46,59 @@ except ImportError as exc:
     sys.exit(1)
 
 
-OUTPUT_PATH = os.path.join(_REPO_ROOT, "static", "demo", "playlist.json")
+_DEMO_DIR = os.path.join(_REPO_ROOT, "static", "demo")
+OUTPUT_PATH = os.path.join(_DEMO_DIR, "playlist.json")
+TRACKS_TXT = os.path.join(_DEMO_DIR, "tracks.txt")
 
 
 def _slug(text):
     """Lowercase-kebab slug for filenames (no diacritics, no punctuation)."""
     s = re.sub(r"[^a-zA-Z0-9]+", "-", text.lower()).strip("-")
     return s or "track"
+
+
+def _read_tracks_file():
+    """Return the list of URLs in static/demo/tracks.txt (one per line),
+    skipping blank lines and #-comments. Returns [] if the file is missing."""
+    if not os.path.isfile(TRACKS_TXT):
+        return []
+    urls = []
+    with open(TRACKS_TXT, "r", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            urls.append(line)
+    return urls
+
+
+def _download(url, dest_path):
+    """Stream URL → dest_path. Returns True on success."""
+    if not url:
+        return False
+    try:
+        r = requests.get(url, timeout=30, stream=True)
+        r.raise_for_status()
+        with open(dest_path, "wb") as fh:
+            for chunk in r.iter_content(chunk_size=64 * 1024):
+                if chunk:
+                    fh.write(chunk)
+        return True
+    except Exception as exc:
+        print(f"  download failed ({url[:60]}...): {exc}")
+        return False
+
+
+def _dominant_color(image_path):
+    """Sample a representative hex color from a downloaded album JPG.
+    Falls back to the navy default if colorthief is unavailable or errors."""
+    try:
+        from colorthief import ColorThief
+        r, g, b = ColorThief(image_path).get_color(quality=10)
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception as exc:
+        print(f"  color sampling failed: {exc}")
+        return "#1a1a2e"
 
 
 def _extract_track_id(url_or_id):
@@ -114,8 +167,13 @@ def _fetch_track_meta(sp, track_id):
 
 def main(urls):
     if not urls:
-        print("Usage: python build_demo_playlist.py <spotify-url> [<spotify-url> ...]")
-        sys.exit(1)
+        urls = _read_tracks_file()
+        if urls:
+            print(f"Reading {len(urls)} URL(s) from {TRACKS_TXT}")
+        else:
+            print(f"No URLs given and {TRACKS_TXT} is empty/missing.")
+            print("Usage: python scripts/build_demo_playlist.py [<spotify-url> ...]")
+            sys.exit(1)
 
     track_ids = []
     for raw in urls:
@@ -154,6 +212,20 @@ def main(urls):
             print("  no canvas (falls back to default idle canvas)")
 
         slug = _slug(title)
+        canvas_local = f"canvas-{slug}.mp4"
+        art_local = f"album-{slug}.jpg"
+
+        os.makedirs(_DEMO_DIR, exist_ok=True)
+
+        if canvas_cdn and _download(canvas_cdn, os.path.join(_DEMO_DIR, canvas_local)):
+            print(f"  saved → {canvas_local}")
+
+        color = "#1a1a2e"
+        art_path = os.path.join(_DEMO_DIR, art_local)
+        if art_url and _download(art_url, art_path):
+            print(f"  saved → {art_local}")
+            color = _dominant_color(art_path)
+
         playlist.append({
             "track_id": tid,
             "track": title,
@@ -162,9 +234,9 @@ def main(urls):
             "duration_ms": dur_ms,
             "album_art_url": art_url,
             "canvas_cdn_url": canvas_cdn or "",
-            "canvas_local": f"canvas-{slug}.mp4",
-            "art_local": f"album-{slug}.jpg",
-            "dominant_color": "#1a1a2e",
+            "canvas_local": canvas_local,
+            "art_local": art_local,
+            "dominant_color": color,
         })
 
     if not playlist:

@@ -1,51 +1,40 @@
 # Demo assets
 
 These files power PiMusic's demo mode (`DEMO_MODE=true` or the Vercel
-deployment). When a bundled file is missing, `demo_state.py` falls back to
-a public Spotify CDN URL, so the demo still works with an empty folder —
-it just won't be offline-capable.
+deployment). The frontend reads from `playlist.json` and prefers the
+bundled MP4/JPG files in this folder, falling back to public Spotify CDN
+URLs only if a local file is missing.
 
-## Expected files
+## Adding or changing tracks
 
-Drop any of these in to override the CDN fallback:
+1. Edit [`tracks.txt`](tracks.txt) — one Spotify track URL per line.
+2. From the repo root, run:
+   ```
+   python scripts/build_demo_playlist.py
+   ```
+   This uses your `.env` Spotify credentials (`SPOTIPY_*` and `SP_DC`) to
+   fetch each track's title, artist, album, duration, 640px album art,
+   and canvas CDN URL — then downloads the MP4 + JPG into this folder
+   and samples the dominant color from the art.
+3. Commit everything in `static/demo/` and push. Vercel serves the
+   bundled MP4s directly with no CDN round-trip.
 
-### Canvas videos (MP4, 9:16, short looping, ~1–3 MB each)
-- `canvas-let-it-happen.mp4` — Tame Impala, Let It Happen
-- `canvas-stick-talk.mp4` — Future, Stick Talk
-- `canvas-get-lucky.mp4` — Daft Punk feat. Pharrell, Get Lucky
+The script can also take URLs as CLI args if you'd rather not edit
+`tracks.txt`:
 
-### Album art (JPG, 640×640 is fine)
-- `album-let-it-happen.jpg`
-- `album-stick-talk.jpg`
-- `album-get-lucky.jpg`
-
-## Where the fallbacks come from
-
-If a local file is missing:
-- Canvas: falls back to the Stick Talk canvas URL already hardcoded in
-  `demo_state.py` (proven to serve cleanly from `canvaz.scdn.co`).
-- Album art: falls back to the public `i.scdn.co` image URL for each album.
-
-These CDNs are open / unauthenticated, so nothing in the demo requires API
-keys or running Playwright.
-
-## Adding another track
-
-Edit `_PLAYLIST` in `demo_state.py` at the repo root. Fields are:
-
-```python
-{
-  "track_id":       "<any unique string>",
-  "track":          "Track Name",
-  "artist":         "Artist",
-  "album":          "Album",
-  "duration_ms":    467000,
-  "album_art_url":  "https://i.scdn.co/image/...",
-  "canvas_local":   "canvas-slug.mp4",
-  "art_local":      "album-slug.jpg",
-  "dominant_color": "#hex",
-}
+```
+python scripts/build_demo_playlist.py https://open.spotify.com/track/...
 ```
 
-Then drop the matching `canvas-slug.mp4` / `album-slug.jpg` in this folder
-(optional — it'll use the CDN fallback if missing).
+## Generated files
+
+The script produces:
+
+- `playlist.json` — the resolved metadata Vercel reads at runtime
+- `canvas-<slug>.mp4` — one per track that has a canvas
+- `album-<slug>.jpg` — 640×640 album art per track
+
+If a canvas MP4 is missing for a track, `demo_state.py` falls back to the
+canvas CDN URL stored in `playlist.json` (or the hardcoded Stick Talk
+canvas if that's also empty). Album art falls back to `i.scdn.co` the
+same way.
