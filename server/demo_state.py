@@ -158,9 +158,26 @@ def _is_idle_paused_unlocked():
     )
 
 
+def _maybe_advance_unlocked():
+    """If the current track has finished playing, jump to the next one
+    and shift started_at to the moment that track began. Idempotent and
+    handles long gaps between polls (advances multiple tracks at once
+    if needed)."""
+    if not _state["is_playing"]:
+        return
+    while True:
+        t = _current_track()
+        elapsed_ms = (time.time() - _state["started_at"]) * 1000.0
+        if elapsed_ms < t["duration_ms"]:
+            return
+        _state["started_at"] += t["duration_ms"] / 1000.0
+        _state["index"] = (_state["index"] + 1) % len(_PLAYLIST)
+
+
 def get_state():
     """Return a payload matching the real /api/state schema exactly."""
     with _lock:
+        _maybe_advance_unlocked()
         t = _current_track()
         progress = _progress_ms_unlocked()
         is_playing = _state["is_playing"]
