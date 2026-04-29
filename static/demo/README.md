@@ -1,40 +1,19 @@
 # Demo assets
 
-These files power PiMusic's demo mode (`DEMO_MODE=true` or the Vercel
-deployment). The frontend reads from `playlist.json` and prefers the
-bundled MP4/JPG files in this folder, falling back to public Spotify CDN
-URLs only if a local file is missing.
+Powers the Vercel demo and `DEMO_MODE=true` locally. Every track gets a bundled canvas MP4, album art JPG, and m4a audio file all sitting in this folder, so the demo plays full songs without Spotify auth or hitting the canvas CDN.
 
-## Adding or changing tracks
+## Adding tracks
 
-1. Edit [`tracks.txt`](tracks.txt) — one Spotify track URL per line.
-2. From the repo root, run:
-   ```
-   python scripts/build_demo_playlist.py
-   ```
-   This uses your `.env` Spotify credentials (`SPOTIPY_*` and `SP_DC`) to
-   fetch each track's title, artist, album, duration, 640px album art,
-   and canvas CDN URL — then downloads the MP4 + JPG into this folder
-   and samples the dominant color from the art.
-3. Commit everything in `static/demo/` and push. Vercel serves the
-   bundled MP4s directly with no CDN round-trip.
-
-The script can also take URLs as CLI args if you'd rather not edit
-`tracks.txt`:
+Edit `tracks.txt` with Spotify URLs (one per line), then from the repo root:
 
 ```
-python scripts/build_demo_playlist.py https://open.spotify.com/track/...
+python scripts/build_demo_playlist.py
 ```
 
-## Generated files
+The script uses my `.env` Spotify creds to pull track info and the canvas URL, downloads everything, samples a dominant color from the art, then searches YouTube for the audio and grabs that too. Each YouTube match prints the title and uploader so I can sanity check before commit, just to make sure it didn't pull some weird remix or a 1 hour loop.
 
-The script produces:
+Commit everything in `static/demo/` and push, Vercel picks it up on redeploy.
 
-- `playlist.json` — the resolved metadata Vercel reads at runtime
-- `canvas-<slug>.mp4` — one per track that has a canvas
-- `album-<slug>.jpg` — 640×640 album art per track
+## Fallbacks
 
-If a canvas MP4 is missing for a track, `demo_state.py` falls back to the
-canvas CDN URL stored in `playlist.json` (or the hardcoded Stick Talk
-canvas if that's also empty). Album art falls back to `i.scdn.co` the
-same way.
+Missing canvas falls back to album art. Missing audio plays silent. Build script writes empty strings for anything it couldn't find so partial matches don't break the playlist.
