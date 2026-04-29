@@ -13,8 +13,12 @@ import os
 import threading
 import time
 
-_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-_DEMO_DIR = os.path.join(_BASE_DIR, "static", "demo")
+# demo_state.py lives in server/, but the playlist + canvas/art bundles
+# live at <repo-root>/static/demo/. Walk one level up from this file to
+# reach the repo root. Without this, _load_playlist silently falls back
+# to _DEFAULT_PLAYLIST and bundled MP4s/JPGs are never found.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_DEMO_DIR = os.path.join(_REPO_ROOT, "static", "demo")
 _PLAYLIST_JSON = os.path.join(_DEMO_DIR, "playlist.json")
 
 
