@@ -1,5 +1,4 @@
 # PiMusic demo playlist — one Spotify track URL per line.
-# Lines starting with # are comments. Blank lines are ignored.
 #
 # After editing, run from the repo root:
 #     python scripts/build_demo_playlist.py
@@ -8,6 +7,13 @@
 # downloads the canvas MP4 + album JPG into this folder, and writes
 # playlist.json. Commit everything in static/demo/ and push to Vercel.
 
-https://open.spotify.com/track/2X485T9Z5Ll0iQDZpX4TZS
-https://open.spotify.com/track/20fAoPjfYltmd3K3bO7gbt
-https://open.spotify.com/track/69kOkLUCkxIZYexIgSG8rq
+https://open.spotify.com/track/58TaFP5j5i9swOf584yon2?si=0cdeed30ec344c0f
+https://open.spotify.com/track/6fujklziTHa8uoM5OQSfIo?si=26c073f0e4c14682
+https://open.spotify.com/track/4qS2KPWvsQzLvRa9oCHw41?si=2051964a7e89494d
+https://open.spotify.com/track/20fAoPjfYltmd3K3bO7gbt?si=f0e83e2a417d4e92
+https://open.spotify.com/track/2X485T9Z5Ly0xyaghN73ed?si=738a0bd195fb4761
+https://open.spotify.com/track/39MK3d3fonIP8Mz9oHCTBB?si=6600e1ab837b4115
+https://open.spotify.com/track/3UsJUXvHb7qz4GiQtEc4a4?si=d3be2c68069149f4
+https://open.spotify.com/track/2CGNAOSuO1MEFCbBRgUzjd?si=78631d375d92416f
+https://open.spotify.com/track/3Q4gttWQ6hxqWOa3tHoTNi?si=b6e61dd1d81446fa
+https://open.spotify.com/track/09hbZ8vF8YmlVQq55Ai1Ay?si=df25cfa56e5e49ab
