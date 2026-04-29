@@ -1,0 +1,12 @@
+{
+  "name": "pimusic",
+  "version": "1.0.0",
+  "description": "PiMusic - Music player interface",
+  "private": true,
+  "scripts": {
+    "build": "echo 'No build step needed'"
+  },
+  "dependencies": {
+    "@vercel/analytics": "^1.4.1"
+  }
+}
