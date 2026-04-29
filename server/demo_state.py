@@ -268,9 +268,12 @@ def seek(position_ms):
     with _lock:
         t = _current_track()
         pos = max(0, min(int(position_ms), t["duration_ms"] - 1))
-        if _state["is_playing"]:
-            _state["started_at"] = time.time() - (pos / 1000.0)
-        else:
+        # Always touch started_at so the frontend's track_changed_at
+        # comparison fires on every seek (otherwise paused-seeks were
+        # silent — track_changed_at didn't move and the audio element
+        # never resynced its currentTime).
+        _state["started_at"] = time.time() - (pos / 1000.0)
+        if not _state["is_playing"]:
             _state["pause_progress_ms"] = pos
             _state["paused_at"] = time.time()
     return True

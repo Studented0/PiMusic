@@ -319,12 +319,36 @@
     }
 
     if (desired && data.track_changed_at !== lastTrackChangedAt) {
-      try { dom.audio.currentTime = (data.progress_ms || 0) / 1000; } catch (e) {}
+      // data.progress_ms gets nulled by the seek lock right after a
+      // scrub — falling back to 0 here was sending audio back to the
+      // start every time you let go of the seek bar. Use the local
+      // clock instead, which already reflects the user's scrub target.
+      var targetMs = (data.progress_ms !== undefined && data.progress_ms !== null)
+        ? data.progress_ms
+        : clockNow();
+      try { dom.audio.currentTime = targetMs / 1000; } catch (e) {}
       lastTrackChangedAt = data.track_changed_at;
     }
 
     if (typeof data.volume === "number") {
       dom.audio.volume = Math.max(0, Math.min(1, data.volume / 100));
+    }
+
+    // Soft drift correction: re-anchor the visual clock to the audio
+    // element when they've drifted >250 ms apart. The audio is the
+    // canonical playback (it's what's actually playing), so it should
+    // win — but skip while the user is mid-scrub or the seek lock is
+    // active so we don't fight the user's intent.
+    if (desired && data.is_playing && !seekDragging
+        && performance.now() >= seekLockUntil
+        && !isNaN(dom.audio.currentTime) && dom.audio.currentTime > 0) {
+      var audioMs = dom.audio.currentTime * 1000;
+      if (Math.abs(audioMs - clockNow()) > 250) {
+        clockMs = audioMs;
+        clockAnchor = performance.now();
+        clockRate = 1.0;
+        driftTarget = null;
+      }
     }
 
     if (desired && lastAudioPlaying !== data.is_playing) {
@@ -489,7 +513,10 @@
     var d   = state.duration_ms || 1;
     var pct = Math.min(1, Math.max(0, p / d));
 
-    if (!seekDragging && performance.now() >= seekLockUntil) {
+    // The seek lock is for ignoring stale server progress, not for
+    // freezing the visual — keep drawing the local clock so the bar
+    // doesn't sit frozen for the whole 5s after letting go of a scrub.
+    if (!seekDragging) {
       var pctRound = Math.round(pct * 10000);
       if (pctRound !== prevPct) {
         prevPct = pctRound;
@@ -827,6 +854,11 @@
     seekDragging = false;
     var posMs = seekFromEvent(e);
     seekLockUntil = performance.now() + INPUT_LOCK_MS;
+    // Move audio immediately so it doesn't lag behind the visual
+    // until the server round-trip completes (~500ms).
+    if (dom.audio && dom.audio.src) {
+      try { dom.audio.currentTime = posMs / 1000; } catch (err) {}
+    }
     clearTimeout(seekTimer);
     seekTimer = setTimeout(function () {
       post("/api/seek", { position_ms: posMs });
