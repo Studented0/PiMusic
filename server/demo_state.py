@@ -37,6 +37,17 @@ def _resolve_art(local_name, cdn_fallback):
     return cdn_fallback
 
 
+def _resolve_audio(local_name):
+    """Return the public URL for a bundled audio file, or '' if missing.
+    Audio is bundled-only — there's no CDN fallback for full track audio."""
+    if not local_name:
+        return ""
+    local_path = os.path.join(_DEMO_DIR, local_name)
+    if os.path.isfile(local_path):
+        return "/static/demo/" + local_name
+    return ""
+
+
 # Stick Talk canvas URL is known-working (it's the idle screensaver default
 # and has been cached in the app for months). Used as a universal fallback
 # until real canvases are dropped into static/demo/.
@@ -114,9 +125,11 @@ for _t in _PLAYLIST:
     _t.setdefault("canvas_cdn_url", "")
     _t.setdefault("canvas_local", "")
     _t.setdefault("art_local", "")
+    _t.setdefault("audio_local", "")
     _t.setdefault("dominant_color", "#1a1a2e")
     _t["canvas_url"] = _resolve_canvas(_t["canvas_local"], _t.get("canvas_cdn_url") or "")
     _t["album_art_local"] = _resolve_art(_t["art_local"], _t.get("album_art_url", ""))
+    _t["audio_url"] = _resolve_audio(_t["audio_local"])
 
 
 # For the idle screensaver, prefer any track with a real canvas; fall back
@@ -200,6 +213,7 @@ def get_state():
             "album_art_local": "" if idle_paused else t["album_art_local"],
             "canvas_url": "" if idle_paused else t["canvas_url"],
             "canvas_cdn_url": "" if idle_paused else (t.get("canvas_cdn_url") or ""),
+            "audio_url": "" if idle_paused else t["audio_url"],
             "duration_ms": 0 if idle_paused else t["duration_ms"],
             "progress_ms": 0 if idle_paused else progress,
             "is_playing": is_playing,

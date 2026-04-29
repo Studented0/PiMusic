@@ -26,7 +26,8 @@
     sourceBadge: $("#source-badge"),
     sourceLabel: $("#source-label"),
     sourceIconSpotify: $("#source-icon-spotify"),
-    sourceIconCider:   $("#source-icon-cider")
+    sourceIconCider:   $("#source-icon-cider"),
+    audio:     $("#audio-player")
   };
 
   console.error("[PiMusic] app.js v43 loaded at " + new Date().toISOString());
@@ -286,6 +287,61 @@
 
     dom.canvas.classList.remove("active");
     loadCanvasSrc(proxyUrl);
+  }
+
+  /* ── Audio sync (demo mode) ────────────────────────────────
+     Drives the hidden <audio> element off /api/state. The server
+     auto-advances tracks on time, so the audio just needs to follow:
+       - swap src when audio_url changes
+       - resync currentTime on next/prev/seek (track_changed_at moves)
+       - mirror is_playing (autoplay is browser-blocked until first click)
+       - mirror volume                                                    */
+
+  var lastAudioSrc = "";
+  var lastAudioPlaying = null;
+  var lastTrackChangedAt = null;
+
+  function syncAudio(data) {
+    if (!dom.audio) return;
+    var desired = data.audio_url || "";
+
+    if (desired !== lastAudioSrc) {
+      if (desired) {
+        dom.audio.src = desired;
+        dom.audio.load();
+      } else {
+        dom.audio.removeAttribute("src");
+        dom.audio.load();
+      }
+      lastAudioSrc = desired;
+      lastAudioPlaying = null;
+      lastTrackChangedAt = null;  // force seek-sync below
+    }
+
+    if (desired && data.track_changed_at !== lastTrackChangedAt) {
+      try { dom.audio.currentTime = (data.progress_ms || 0) / 1000; } catch (e) {}
+      lastTrackChangedAt = data.track_changed_at;
+    }
+
+    if (typeof data.volume === "number") {
+      dom.audio.volume = Math.max(0, Math.min(1, data.volume / 100));
+    }
+
+    if (desired && lastAudioPlaying !== data.is_playing) {
+      if (data.is_playing) {
+        dom.audio.play().then(function () {
+          lastAudioPlaying = true;
+        }).catch(function () {
+          /* Autoplay blocked until first user gesture. Leave
+             lastAudioPlaying unchanged so the next poll retries — once
+             the user clicks play (or anything that triggers a poll
+             after a gesture), it'll go through. */
+        });
+      } else {
+        dom.audio.pause();
+        lastAudioPlaying = false;
+      }
+    }
   }
 
   /* ── Source badge ──────────────────────────────────────── */
@@ -646,6 +702,7 @@
         }
 
         applyCanvas(incomingCanvas, incomingCdn, incomingVisual);
+        syncAudio(data);
       });
     }).catch(function (e) {
       console.error("[PiMusic] Poll error:", e);
@@ -668,12 +725,15 @@
       state.is_playing = false;
       clockMs     = clockNow();
       clockAnchor = performance.now();
+      if (dom.audio) dom.audio.pause();
       post("/api/pause");
     } else {
       state.is_playing = true;
       clockAnchor = performance.now();
       clockRate   = 1.0;
       driftTarget = null;
+      // Kick off audio inside the user gesture so browsers don't block it.
+      if (dom.audio && dom.audio.src) dom.audio.play().catch(function () {});
       post("/api/play");
     }
     pendingServerResync = true;

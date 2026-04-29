@@ -30,6 +30,11 @@ import time
 import dotenv
 import requests
 
+try:
+    import yt_dlp
+except ImportError:
+    yt_dlp = None
+
 dotenv.load_dotenv()
 
 # This script lives in scripts/; the repo root is one directory up.
@@ -99,6 +104,141 @@ def _dominant_color(image_path):
     except Exception as exc:
         print(f"  color sampling failed: {exc}")
         return "#1a1a2e"
+
+
+# Title keywords that almost always indicate a wrong-version YouTube hit
+# (remixes, hour-long loops, fan covers, etc.). We hard-reject any
+# candidate whose title contains one of these — *unless* the original
+# Spotify track title also contains the keyword, which catches edge cases
+# like "Live Forever" or actual official remixes the user picked.
+_BAD_KEYWORDS = (
+    "remix", "cover", "live performance", "live at", "live in",
+    "1 hour", "10 hour", "loop", "8d", "slowed", "reverb",
+    "sped up", "speed up", "instrumental", "karaoke", "reaction",
+    "lyrics", "lyric video", "nightcore", "mashup", "tutorial",
+)
+
+
+def _score_youtube_match(entry, track, artist, expected_s):
+    """Return a score where higher is better, or None if disqualified.
+    Designed so the obviously-correct match (Topic channel, exact title,
+    near-identical duration) wins by a wide margin."""
+    title = (entry.get("title") or "").lower()
+    uploader = (entry.get("uploader") or entry.get("channel") or "").lower()
+    duration = entry.get("duration")
+    if not duration:
+        return None
+
+    track_lower = track.lower()
+    for bad in _BAD_KEYWORDS:
+        if bad in title and bad not in track_lower:
+            return None
+
+    # Reject extreme version mismatches (>120s drift = wrong song or
+    # wildly different cut). Within 120s we trust the scoring below.
+    diff = abs(duration - expected_s)
+    if diff > 120:
+        return None
+
+    # Closer duration = higher score. ~1 point per second of drift.
+    score = -diff
+
+    # "Artist - Topic" channels are auto-generated official audio — the
+    # single strongest signal that this is the right upload.
+    if uploader.endswith("- topic"):
+        score += 60
+
+    # Exact track title in the video title.
+    if track_lower in title:
+        score += 25
+
+    # Uploader name overlaps with the artist (handles "Future", "Daft Punk",
+    # collabs like "Daft Punk, Pharrell Williams, Nile Rodgers").
+    for a in artist.lower().split(","):
+        a = a.strip()
+        if a and a in uploader:
+            score += 15
+            break
+
+    # "Official audio" / "official video" uploads.
+    if "official" in title:
+        score += 5
+
+    return score
+
+
+def _find_youtube_match(track, artist, expected_duration_ms):
+    """Search YouTube for the best audio match of (track, artist).
+    Returns the YouTube video ID, or None if nothing scores well enough."""
+    if yt_dlp is None:
+        return None
+
+    query = f"{track} {artist}"
+    expected_s = (expected_duration_ms or 0) / 1000.0
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "skip_download": True,
+        "noprogress": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            result = ydl.extract_info(f"ytsearch10:{query}", download=False)
+    except Exception as exc:
+        print(f"  search failed: {exc}")
+        return None
+
+    candidates = (result or {}).get("entries") or []
+
+    best, best_score = None, float("-inf")
+    for c in candidates:
+        if not c:
+            continue
+        score = _score_youtube_match(c, track, artist, expected_s)
+        if score is None:
+            continue
+        if score > best_score:
+            best_score = score
+            best = c
+
+    if not best:
+        return None
+
+    title = best.get("title", "?")
+    uploader = best.get("uploader") or best.get("channel") or "?"
+    dur = best.get("duration") or 0
+    drift = dur - expected_s
+    sign = "+" if drift >= 0 else ""
+    print(f"  matched: '{title}' by {uploader}  ({dur:.0f}s, {sign}{drift:.0f}s)")
+    return best.get("id")
+
+
+def _download_audio(video_id, dest_dir, slug):
+    """Download YouTube audio as m4a (no ffmpeg needed). Returns the
+    local filename on success, '' on failure."""
+    if yt_dlp is None or not video_id:
+        return ""
+    outtmpl = os.path.join(dest_dir, f"audio-{slug}.%(ext)s")
+    ydl_opts = {
+        "format": "bestaudio[ext=m4a]/bestaudio",
+        "outtmpl": outtmpl,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "overwrites": True,
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(
+                f"https://www.youtube.com/watch?v={video_id}", download=True
+            )
+        ext = info.get("ext", "m4a")
+        return f"audio-{slug}.{ext}"
+    except Exception as exc:
+        print(f"  audio download failed: {exc}")
+        return ""
 
 
 def _extract_track_id(url_or_id):
@@ -226,6 +366,16 @@ def main(urls):
             print(f"  saved → {art_local}")
             color = _dominant_color(art_path)
 
+        # Find + grab a matching YouTube audio track. We search by title +
+        # artist, score candidates against Spotify's reported duration,
+        # and reject anything that smells like a remix/cover/loop.
+        audio_local = ""
+        yt_id = _find_youtube_match(title, artist, dur_ms)
+        if yt_id:
+            audio_local = _download_audio(yt_id, _DEMO_DIR, slug)
+            if audio_local:
+                print(f"  saved → {audio_local}")
+
         playlist.append({
             "track_id": tid,
             "track": title,
@@ -236,6 +386,7 @@ def main(urls):
             "canvas_cdn_url": canvas_cdn or "",
             "canvas_local": canvas_local,
             "art_local": art_local,
+            "audio_local": audio_local,
             "dominant_color": color,
         })
 

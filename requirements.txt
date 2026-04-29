@@ -6,3 +6,4 @@ curl_cffi>=0.14
 playwright>=1.58
 python-dotenv>=1.0
 psutil>=5.9
+yt-dlp>=2025.1
