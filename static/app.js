@@ -368,6 +368,21 @@
     }
   }
 
+  // Audio file is often a few seconds shorter than Spotify's reported
+  // duration (album version vs deluxe, etc.). Without this, the track
+  // sits in silence until the wallclock catches up. End of audio ->
+  // skip to next so the demo flows naturally. Reuses prepareSkip for
+  // the same in-flight-poll race protection as a manual skip.
+  if (dom.audio) {
+    dom.audio.addEventListener("ended", function () {
+      if (state.is_playing && state.track_id) {
+        prepareSkip();
+        post("/api/next");
+        emergencyPoll(200);
+      }
+    });
+  }
+
   /* ── Source badge ──────────────────────────────────────── */
 
   function updateSourceBadge(source) {
@@ -767,10 +782,20 @@
     emergencyPoll(400);
   });
 
-  dom.btnNext.addEventListener("click", function (e) {
-    e.stopPropagation();
-    if (isCooling()) return;
-    setCooldown(BTN_COOLDOWN_MS);
+  // Cleanup that runs on every skip — pause the old audio so it
+  // doesn't keep playing for ~400ms until the new src loads, and bump
+  // pollReqId so any in-flight regular poll (which carries OLD track
+  // data) gets orphaned when its response arrives.
+  function prepareSkip() {
+    pollReqId += 1;
+    if (dom.audio) {
+      dom.audio.pause();
+      dom.audio.removeAttribute("src");
+      dom.audio.load();
+    }
+    lastAudioSrc = "";
+    lastAudioPlaying = null;
+    lastTrackChangedAt = null;
     pendingSkip = true;
     dom.trackInfo.classList.add("stale");
     state.canvas_url = null;
@@ -778,8 +803,18 @@
     state.visual_type = "image";
     applyCanvas(null, null, "image");
     clockSet(0);
-    state.is_playing = true;
+    // Don't force is_playing=true here — backend next_track preserves
+    // play/pause state, so forcing it caused the play icon to flicker
+    // (flip to playing on click, then back to paused once the poll
+    // returned the real state).
     trackChangeLocalTs = performance.now();
+  }
+
+  dom.btnNext.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (isCooling()) return;
+    setCooldown(BTN_COOLDOWN_MS);
+    prepareSkip();
     post("/api/next");
     emergencyPoll(350);
   });
@@ -788,15 +823,7 @@
     e.stopPropagation();
     if (isCooling()) return;
     setCooldown(BTN_COOLDOWN_MS);
-    pendingSkip = true;
-    dom.trackInfo.classList.add("stale");
-    state.canvas_url = null;
-    state.canvas_cdn_url = null;
-    state.visual_type = "image";
-    applyCanvas(null, null, "image");
-    clockSet(0);
-    state.is_playing = true;
-    trackChangeLocalTs = performance.now();
+    prepareSkip();
     post("/api/previous");
     emergencyPoll(350);
   });
