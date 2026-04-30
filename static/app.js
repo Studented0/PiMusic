@@ -216,7 +216,7 @@
     is_playing: true,
     paused_at: 0,
     pause_progress_ms: 0,
-    volume: 65,
+    volume: 40,                 // YouTube rips are loud; start lower
     source: "spotify",
     visual_mode: "canvas_card"
   } : null;
@@ -987,6 +987,11 @@
   dom.volSlider.addEventListener("input", function (e) {
     e.stopPropagation();
     state.volume = parseInt(e.target.value, 10);
+    // Update the audio element immediately so the slider feels live —
+    // otherwise volume only changes on the next poll tick (~1s).
+    if (dom.audio) {
+      dom.audio.volume = Math.max(0, Math.min(1, state.volume / 100));
+    }
     clearTimeout(volTimer);
     volTimer = setTimeout(function () {
       post("/api/volume", { volume: state.volume });
