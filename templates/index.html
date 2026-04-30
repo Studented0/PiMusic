@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <title>PiMusic</title>
   <link rel="stylesheet" href="/static/style.css?v=47">
+  <script>
+    // When true, the frontend manages all demo timing/skipping locally.
+    // Necessary on Vercel — its serverless functions don't share memory,
+    // so server-side demo state diverges across instances.
+    window.PIMUSIC_DEMO = {% if demo_playlist %}true{% else %}false{% endif %};
+    {% if demo_playlist %}window.PIMUSIC_PLAYLIST = {{ demo_playlist|tojson }};{% endif %}
+  </script>
 </head>
 <body>
   {% if demo_mode %}<div class="demo-banner">DEMO MODE</div>{% endif %}

@@ -40,14 +40,49 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 # ── Pages ────────────────────────────────────────────────
 
+def _client_playlist():
+    """Strip the demo playlist down to the fields the client actually
+    consumes, and only include tracks that were resolved at module load.
+    Inlined into index.html so the client doesn't need a second fetch."""
+    out = []
+    for t in demo_state._PLAYLIST:
+        out.append({
+            "track_id":         t.get("track_id", ""),
+            "track":            t.get("track", ""),
+            "artist":           t.get("artist", ""),
+            "album":            t.get("album", ""),
+            "duration_ms":      t.get("duration_ms", 0),
+            "album_art_url":    t.get("album_art_url", ""),
+            "album_art_local":  t.get("album_art_local", ""),
+            "canvas_url":       t.get("canvas_url", ""),
+            "canvas_cdn_url":   t.get("canvas_cdn_url", ""),
+            "audio_url":        t.get("audio_url", ""),
+            "dominant_color":   t.get("dominant_color", "#1a1a2e"),
+        })
+    return out
+
+
 @app.route("/")
 def index():
-    return render_template("index.html", demo_mode=True)
+    return render_template(
+        "index.html",
+        demo_mode=True,
+        demo_playlist=_client_playlist(),
+    )
 
 
 @app.route("/settings")
 def settings_page():
     return render_template("settings.html", demo_mode=True)
+
+
+@app.route("/api/playlist", methods=["GET"])
+def api_playlist():
+    """Stateless playlist endpoint. The client uses this to seed its
+    own state machine — Vercel serverless can't share module-level
+    state between instances, so trying to track 'currently playing'
+    on the server doesn't work."""
+    return jsonify({"playlist": _client_playlist()})
 
 
 # ── State & transport ────────────────────────────────────

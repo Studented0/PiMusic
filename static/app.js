@@ -186,12 +186,152 @@
     return m + ":" + (s < 10 ? "0" : "") + s;
   }
 
-  function post(url, body) {
+  function realPost(url, body) {
     return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined
     }).catch(function () { return { ok: false }; });
+  }
+
+  // ── Client-side demo state ────────────────────────────────────
+  // When the page is served from Vercel, window.PIMUSIC_DEMO === true
+  // and window.PIMUSIC_PLAYLIST holds the resolved playlist. We keep
+  // all timing/skipping state in the browser so multi-instance
+  // serverless can't make it diverge between polls.
+
+  var demoEnabled = !!window.PIMUSIC_DEMO && !!window.PIMUSIC_PLAYLIST
+                    && window.PIMUSIC_PLAYLIST.length > 0;
+  var demoPlaylist = demoEnabled ? window.PIMUSIC_PLAYLIST : null;
+  var demoFirstCanvasIdx = -1;
+  if (demoEnabled) {
+    for (var di = 0; di < demoPlaylist.length; di++) {
+      if (demoPlaylist[di].canvas_url) { demoFirstCanvasIdx = di; break; }
+    }
+  }
+  var IDLE_AFTER_PAUSE_S = 15;
+  var demo = demoEnabled ? {
+    index: 0,
+    started_at: Date.now(),     // wallclock ms when current track started
+    is_playing: true,
+    paused_at: 0,
+    pause_progress_ms: 0,
+    volume: 65,
+    source: "spotify",
+    visual_mode: "canvas_card"
+  } : null;
+
+  function demoCurrent() { return demoPlaylist[demo.index % demoPlaylist.length]; }
+
+  function demoMaybeAdvance() {
+    if (!demo.is_playing) return;
+    while (true) {
+      var t = demoCurrent();
+      var elapsed = Date.now() - demo.started_at;
+      if (elapsed < t.duration_ms) return;
+      demo.started_at += t.duration_ms;
+      demo.index = (demo.index + 1) % demoPlaylist.length;
+    }
+  }
+
+  function demoProgressMs() {
+    if (!demo.is_playing) return demo.pause_progress_ms;
+    return Math.max(0, Date.now() - demo.started_at);
+  }
+
+  function demoIsIdle() {
+    return !demo.is_playing
+        && demo.paused_at > 0
+        && (Date.now() - demo.paused_at) > IDLE_AFTER_PAUSE_S * 1000;
+  }
+
+  function synthState() {
+    demoMaybeAdvance();
+    var t = demoCurrent();
+    var idleT = demoFirstCanvasIdx >= 0 ? demoPlaylist[demoFirstCanvasIdx] : t;
+    var idle = demoIsIdle();
+    var hasCanvas = !!t.canvas_url;
+    return {
+      track_id:           idle ? "" : t.track_id,
+      track:              idle ? "" : t.track,
+      artist:             idle ? "" : t.artist,
+      album:              idle ? "" : t.album,
+      album_art_url:      idle ? "" : t.album_art_url,
+      album_art_local:    idle ? "" : t.album_art_local,
+      canvas_url:         idle ? "" : t.canvas_url,
+      canvas_cdn_url:     idle ? "" : t.canvas_cdn_url,
+      audio_url:          idle ? "" : t.audio_url,
+      duration_ms:        idle ? 0  : t.duration_ms,
+      progress_ms:        idle ? 0  : demoProgressMs(),
+      is_playing:         demo.is_playing,
+      volume:             demo.volume,
+      device:             "PiMusic Demo",
+      source:             demo.source,
+      server_time:        Date.now() / 1000,
+      track_changed_at:   demo.started_at / 1000,
+      visual_mode:        demo.visual_mode,
+      visual_type:        (hasCanvas && !idle) ? "canvas_video" : "image",
+      cpu_throttled:      false,
+      rate_limited_until: 0,
+      dominant_color:     t.dominant_color,
+      idle_canvas_track_id: idleT.track_id,
+      idle_canvas_url:    idleT.canvas_url || "",
+      idle_canvas_cdn_url: idleT.canvas_cdn_url || ""
+    };
+  }
+
+  function demoApply(url, body) {
+    if (!demo) return;
+    body = body || {};
+    if (url === "/api/play" || (url === "/api/hid/input" && body.action === "play")) {
+      if (!demo.is_playing) {
+        demo.started_at = Date.now() - demo.pause_progress_ms;
+        demo.is_playing = true;
+        demo.paused_at = 0;
+      }
+    } else if (url === "/api/pause" || (url === "/api/hid/input" && body.action === "pause")) {
+      if (demo.is_playing) {
+        demo.pause_progress_ms = demoProgressMs();
+        demo.is_playing = false;
+        demo.paused_at = Date.now();
+      }
+    } else if (url === "/api/next") {
+      demo.index = (demo.index + 1) % demoPlaylist.length;
+      demo.started_at = Date.now();
+      demo.pause_progress_ms = 0;
+      if (!demo.is_playing) demo.paused_at = Date.now();
+    } else if (url === "/api/previous") {
+      // Match real player semantics: >3s in restarts the track,
+      // otherwise jump to the previous one.
+      if (demoProgressMs() > 3000) {
+        demo.started_at = Date.now();
+      } else {
+        demo.index = (demo.index - 1 + demoPlaylist.length) % demoPlaylist.length;
+        demo.started_at = Date.now();
+      }
+      demo.pause_progress_ms = 0;
+      if (!demo.is_playing) demo.paused_at = Date.now();
+    } else if (url === "/api/seek") {
+      var t = demoCurrent();
+      var pos = Math.max(0, Math.min(parseInt(body.position_ms, 10) || 0, t.duration_ms - 1));
+      demo.started_at = Date.now() - pos;
+      if (!demo.is_playing) {
+        demo.pause_progress_ms = pos;
+        demo.paused_at = Date.now();
+      }
+    } else if (url === "/api/volume") {
+      demo.volume = Math.max(0, Math.min(100, parseInt(body.volume, 10) || 0));
+    } else if (url === "/api/source") {
+      if (body.source === "spotify" || body.source === "cider") demo.source = body.source;
+    }
+  }
+
+  function post(url, body) {
+    if (demoEnabled) {
+      demoApply(url, body);
+      return Promise.resolve({ ok: true });
+    }
+    return realPost(url, body);
   }
 
   var emergencyPollTimer = null;
@@ -641,9 +781,12 @@
   function poll() {
     pollReqId += 1;
     var myReqId = pollReqId;
-    return fetch("/api/state").then(function (res) {
-      if (!res.ok) return;
-      return res.json().then(function (data) {
+    var stateP = demoEnabled
+      ? Promise.resolve(synthState())
+      : fetch("/api/state").then(function (res) { return res.ok ? res.json() : null; });
+    return stateP.then(function (data) {
+      if (!data) return;
+      return Promise.resolve(data).then(function (data) {
         if (myReqId !== pollReqId) return;
         var trackChanged = data.track_id && data.track_id !== state.track_id;
 
