@@ -216,10 +216,10 @@ def _find_youtube_match(track, artist, expected_duration_ms):
 
 
 def _download_audio(video_id, dest_dir, slug):
-    """Download YouTube audio as m4a (no ffmpeg needed). Returns the
-    local filename on success, '' on failure."""
+    """Download YouTube audio as m4a (no ffmpeg needed). Returns
+    (filename, duration_ms) on success, ('', 0) on failure."""
     if yt_dlp is None or not video_id:
-        return ""
+        return "", 0
     outtmpl = os.path.join(dest_dir, f"audio-{slug}.%(ext)s")
     ydl_opts = {
         "format": "bestaudio[ext=m4a]/bestaudio",
@@ -235,10 +235,11 @@ def _download_audio(video_id, dest_dir, slug):
                 f"https://www.youtube.com/watch?v={video_id}", download=True
             )
         ext = info.get("ext", "m4a")
-        return f"audio-{slug}.{ext}"
+        duration_ms = int(round((info.get("duration") or 0) * 1000))
+        return f"audio-{slug}.{ext}", duration_ms
     except Exception as exc:
         print(f"  audio download failed: {exc}")
-        return ""
+        return "", 0
 
 
 def _extract_track_id(url_or_id):
@@ -370,18 +371,24 @@ def main(urls):
         # artist, score candidates against Spotify's reported duration,
         # and reject anything that smells like a remix/cover/loop.
         audio_local = ""
+        audio_duration_ms = 0
         yt_id = _find_youtube_match(title, artist, dur_ms)
         if yt_id:
-            audio_local = _download_audio(yt_id, _DEMO_DIR, slug)
+            audio_local, audio_duration_ms = _download_audio(yt_id, _DEMO_DIR, slug)
             if audio_local:
-                print(f"  saved → {audio_local}")
+                print(f"  saved → {audio_local} ({audio_duration_ms / 1000:.0f}s)")
+
+        # Use the YouTube file's actual duration when we got one — that's
+        # what's actually playing, so progress + auto-advance should match.
+        # Fall back to Spotify's duration only if no audio was downloaded.
+        effective_duration = audio_duration_ms if audio_duration_ms > 0 else dur_ms
 
         playlist.append({
             "track_id": tid,
             "track": title,
             "artist": artist,
             "album": album,
-            "duration_ms": dur_ms,
+            "duration_ms": effective_duration,
             "album_art_url": art_url,
             "canvas_cdn_url": canvas_cdn or "",
             "canvas_local": canvas_local,
