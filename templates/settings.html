@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>PiMusic — Settings</title>
-  <link rel="stylesheet" href="/static/style.css?v=43">
+  <link rel="stylesheet" href="/static/style.css?v=52">
 </head>
 <body class="settings-body">
   <div class="settings-page">
@@ -99,6 +99,21 @@
           <span class="vm-tile-label">Artwork<br>Only</span>
         </button>
       </div>
+      <div class="settings-label">Lyrics Background</div>
+      <div id="lyrics_bg" class="visual-mode-tiles visual-mode-tiles--two" role="radiogroup" aria-label="Lyrics Background">
+        <button type="button" class="vm-tile" data-value="media" role="radio" aria-checked="false">
+          <span class="vm-tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M7 9h7M7 12h10M7 15h6" stroke-width="1.6"/></svg>
+          </span>
+          <span class="vm-tile-label">Canvas &amp; Art<br>Behind Lyrics</span>
+        </button>
+        <button type="button" class="vm-tile" data-value="dark" role="radio" aria-checked="false">
+          <span class="vm-tile-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2" fill="currentColor" stroke="none" opacity=".25"/><path d="M7 9h7M7 12h10M7 15h6" stroke-width="1.6"/></svg>
+          </span>
+          <span class="vm-tile-label">Plain<br>Dark</span>
+        </button>
+      </div>
       <label class="settings-label">
         CPU Threshold (%)
         <div class="settings-range-wrap">
@@ -137,6 +152,6 @@
     </div>
   </div>
 
-  <script src="/static/settings.js?v=43"></script>
+  <script src="/static/settings.js?v=61"></script>
 </body>
 </html>

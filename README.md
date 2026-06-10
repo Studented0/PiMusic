@@ -8,8 +8,8 @@ A desk display for Spotify and Apple Music. Built with a Raspberry Pi 3B+ and a 
 
 
 <img width="946" height="965" alt="Card mode" src="https://github.com/user-attachments/assets/76271508-90b1-4d4c-8391-4987c300cea9" />
-<img width="939" height="974" alt="Canvas behind artwork" src="https://github.com/user-attachments/assets/e98f7299-f699-494a-8890-7e4b21579528" />
-<img width="1005" height="927" alt="Cinematic fullscreen" src="https://github.com/user-attachments/assets/d6a9b810-50e6-4a7c-a87e-24a7d04cb654" />
+<img width="946" height="965" alt="Canvas behind artwork" src="https://github.com/user-attachments/assets/e98f7299-f699-494a-8890-7e4b21579528" />
+<img width="946" height="965" alt="Cinematic fullscreen" src="https://github.com/user-attachments/assets/d6a9b810-50e6-4a7c-a87e-24a7d04cb654" />
 
 
 ---
@@ -42,31 +42,50 @@ cffi with Chrome131 impersonation gets past it. When on Apple Music, same system
 Flask server on PC handles Spotify polling, Canvas fetching, Apple Music by using Cider (3rd party Apple Music desktop app), Album art caching, and just gives everything to the Pi over the network.
 
 ---
-## Headaches/things to fix
+## Search, Playlists, and Liked Songs
 
-1. App is slow to update sometimes (not a dealbreaker only a couple seconds)
-2. Scrobbler goes to 0 when you pause then updates to the right timestamp
-3. Volume is janky to update and does not update in realtime
+Tap the magnifier in the top bar to open the library overlay. Search Spotify with the on-screen keyboard (the Pi has no physical keyboard), browse your playlists and liked songs, tap a song to play it, or use the queue button on any row. Playing a track from a playlist/album keeps the rest of the collection queued. Spotify-only for now; requires a one-time re-auth after the playlist scopes were added:
+
+```
+python server\spotify_auth.py --reauth
+```
+
+## Lyrics
+
+Tap the lyrics icon to open synced lyrics for the current track (works for both Spotify and Apple Music). Lyrics come from LRCLIB with Spotify's internal lyrics endpoint as a fallback (same captured web-player tokens as Canvas). Synced lines auto-scroll and highlight using the same predictive clock as the progress bar — tap a line to seek there.
+
+---
+## Fixed headaches (previously known issues)
+
+1. ~~App is slow to update sometimes~~ — server now applies play/pause/seek/volume optimistically and force-polls after every command; `/api/state` extrapolates progress between polls.
+2. ~~Progress goes to 0 when you pause then corrects itself~~ — frontend no longer wipes `progress_ms` during input locks, and drift correction between polls is actually wired up now.
+3. ~~Volume is janky and not realtime~~ — volume reflects instantly server-side (Cider volume was hardcoded to 0; now polled for real), and the UI lock dropped from 5s to 1.8s.
+4. Album art 404s — art was cached to `server/art_cache/` but served from `art_cache/`; unified (existing files migrate automatically).
+5. Startup no longer chokes the PC's network — heavy tasks are staggered, and the hidden token-capture Chromium uses a persistent profile and blocks images/media/fonts/analytics.
 ---
 ## Project Structure
 
 ```
 PiMusic/
 ├── server/                  # Flask server + all backend modules
-│   ├── spotify_server.py    # Flask routes, canvas proxy, demo-mode wiring
+│   ├── spotify_server.py    # Flask routes, canvas proxy, library/lyrics APIs, demo-mode wiring
 │   ├── spotify_controller.py # Spotify polling, Canvas GraphQL fetch, idle screensaver
+│   ├── spotify_library.py   # Search, playlists, liked songs, play/queue commands
 │   ├── spotify_auth.py      # Spotipy OAuth, Playwright token capture
+│   ├── lyrics.py            # LRCLIB + Spotify lyrics fetch, LRC parsing, cache
 │   ├── cider_controller.py  # Apple Music via Cider, Canvas cross-lookup
 │   ├── source_manager.py    # Source switching
 │   ├── scrobbler.py         # Scrobble logging
 │   ├── resource_monitor.py  # CPU monitoring
-│   ├── album_cache.py       # Album art download, atomic writes, quota pruning
+│   ├── album_cache.py       # Album art download, pre-blurred bg variants, quota pruning
 │   └── demo_state.py        # Hardcoded playlist for DEMO_MODE / Vercel
 ├── api/                     # Vercel serverless entry (lean Flask, no heavy deps)
 │   ├── index.py
 │   └── requirements.txt
 ├── static/
 │   ├── app.js               # Polling, rendering, controls, encoder keydown handling
+│   ├── library.js           # Search/playlists/liked overlay + on-screen keyboard
+│   ├── lyrics.js            # Synced lyrics overlay
 │   ├── style.css
 │   ├── settings.js
 │   └── demo/                # Demo-mode playlist + assets
@@ -77,6 +96,7 @@ PiMusic/
 │   ├── start-pimusic-hidden.vbs # Windows autostart (rotates server.log, runs hidden)
 │   ├── debug-pimusic.bat    # Stop autostart task, run server in a visible console
 │   ├── view-log.bat         # Tail server.log
+│   ├── smoke_test.py        # Demo-mode test-client smoke tests (safe while server runs)
 │   └── build_demo_playlist.py # Build static/demo/playlist.json from Spotify URLs
 ├── firmware/
 │   └── pimusic_encoder/

@@ -19,7 +19,11 @@ SCOPES = (
     "user-read-playback-state "
     "user-read-currently-playing "
     "user-modify-playback-state "
-    "user-read-email"
+    "user-read-email "
+    "playlist-read-private "
+    "playlist-read-collaborative "
+    "user-library-read "
+    "user-library-modify"
 )
 
 # ── Web player token (for Canvas GraphQL) ────────────────
@@ -29,8 +33,42 @@ _wp_token_ts = 0.0
 _wp_lock = threading.Lock()
 WP_TOKEN_TTL = 3000  # refresh every 50 min (tokens last ~60 min)
 
+PW_PROFILE_DIR = os.path.expanduser("~/pimusic/pw-profile")
+
+# Resource types / hosts the token-capture browser never needs. The page only
+# has to boot the web player JS far enough to fire one api-partner request,
+# so images, media, fonts, and analytics are pure network noise (and the big
+# reason startup used to hammer DNS/bandwidth).
+_PW_BLOCKED_TYPES = {"image", "media", "font"}
+_PW_BLOCKED_HOSTS = (
+    "google-analytics.com",
+    "googletagmanager.com",
+    "doubleclick.net",
+    "scdn.co/image",
+    "i.scdn.co",
+    "pixel.spotify.com",
+    "sentry.io",
+    "branch.io",
+    "appsflyer.com",
+    "hotjar.com",
+)
+
+
+def _pw_route_filter(route):
+    req = route.request
+    if req.resource_type in _PW_BLOCKED_TYPES:
+        return route.abort()
+    url = req.url
+    for host in _PW_BLOCKED_HOSTS:
+        if host in url:
+            return route.abort()
+    return route.continue_()
+
+
 def _capture_tokens_playwright() -> tuple[str, str]:
-    """Launch real Chromium, load Spotify, intercept Bearer + client-token."""
+    """Launch Chromium, load Spotify, intercept Bearer + client-token.
+    Uses a persistent profile (cached JS between runs) and blocks
+    images/media/fonts/analytics to keep the network burst small."""
     from playwright.sync_api import sync_playwright
 
     bearer = ""
@@ -47,30 +85,71 @@ def _capture_tokens_playwright() -> tuple[str, str]:
             if ct and not client_tok:
                 client_tok = ct
 
+    launch_args = ["--window-size=1,1", "--window-position=32000,32000"]
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=False,
-            args=["--window-size=1,1", "--window-position=32000,32000"],
-        )
-        ctx = browser.new_context()
-        ctx.add_cookies([{
-            "name": "sp_dc", "value": SP_DC,
-            "domain": ".spotify.com", "path": "/",
-            "httpOnly": True, "secure": True,
-        }])
-        page = ctx.new_page()
-        page.on("request", on_request)
+        ctx = None
+        browser = None
         try:
-            page.goto("https://open.spotify.com/", wait_until="load", timeout=25000)
-            for _ in range(40):
-                if bearer and client_tok:
-                    break
-                time.sleep(0.25)
+            os.makedirs(PW_PROFILE_DIR, exist_ok=True)
+            ctx = p.chromium.launch_persistent_context(
+                PW_PROFILE_DIR,
+                headless=False,
+                args=launch_args,
+                # Service workers would bypass route interception and can
+                # serve the app shell out-of-band; keep requests observable.
+                service_workers="block",
+            )
         except Exception as e:
-            print(f"Playwright navigation error: {e}")
-        browser.close()
+            # Stale profile lock or corrupt profile -- fall back to a
+            # throwaway context so token capture still works.
+            print(f"Playwright persistent profile failed ({e}); using fresh context")
+            browser = p.chromium.launch(headless=False, args=launch_args)
+            ctx = browser.new_context(service_workers="block")
+
+        try:
+            ctx.add_cookies([{
+                "name": "sp_dc", "value": SP_DC,
+                "domain": ".spotify.com", "path": "/",
+                "httpOnly": True, "secure": True,
+            }])
+            ctx.route("**/*", _pw_route_filter)
+            page = ctx.new_page()
+            page.on("request", on_request)
+            try:
+                page.goto("https://open.spotify.com/", wait_until="load", timeout=25000)
+                for _ in range(40):
+                    if bearer and client_tok:
+                        break
+                    time.sleep(0.25)
+            except Exception as e:
+                print(f"Playwright navigation error: {e}")
+        finally:
+            try:
+                ctx.close()
+            except Exception:
+                pass
+            if browser:
+                try:
+                    browser.close()
+                except Exception:
+                    pass
 
     return bearer, client_tok
+
+
+def wait_for_wp_tokens(timeout_sec: float = 90.0) -> bool:
+    """Block until web player tokens are captured (or timeout). Used by the
+    staggered startup sequence so canvas prewarm runs only once it can work.
+    Requires BOTH the bearer and the client token -- GraphQL needs both."""
+    deadline = time.time() + timeout_sec
+    while time.time() < deadline:
+        with _wp_lock:
+            if _wp_bearer and _wp_client_token:
+                return True
+        time.sleep(1.0)
+    with _wp_lock:
+        return bool(_wp_bearer and _wp_client_token)
 
 
 def _refresh_wp_tokens():

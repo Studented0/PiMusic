@@ -6,14 +6,14 @@
   var $  = function (s) { return document.querySelector(s); };
   var $$ = function (s) { return Array.prototype.slice.call(document.querySelectorAll(s)); };
 
-  /* ── Visual-mode tile group shim (acts like <select>) ── */
-  var visualModeGroup = (function () {
-    var root = $("#visual_mode");
-    var tiles = $$("#visual_mode .vm-tile");
-    var current = "canvas_card";
+  /* ── Tile group shim (acts like <select>) ───────────── */
+  function makeTileGroup(rootSel, allowed, fallback) {
+    var root = $(rootSel);
+    var tiles = $$(rootSel + " .vm-tile");
+    var current = fallback;
 
     function setValue(v) {
-      if (v !== "canvas_card" && v !== "canvas_bg" && v !== "artwork") v = "canvas_card";
+      if (allowed.indexOf(v) === -1) v = fallback;
       current = v;
       tiles.forEach(function (t) {
         var active = t.getAttribute("data-value") === v;
@@ -32,7 +32,12 @@
       get value() { return current; },
       set value(v) { setValue(v); }
     };
-  })();
+  }
+
+  var visualModeGroup = makeTileGroup(
+    "#visual_mode", ["canvas_card", "canvas_bg", "artwork"], "canvas_card");
+  var lyricsBgGroup = makeTileGroup(
+    "#lyrics_bg", ["media", "dark"], "media");
 
   var fields = {
     spotify_sp_dc:        $("#spotify_sp_dc"),
@@ -45,7 +50,8 @@
     cpu_threshold:        $("#cpu_threshold"),
     scanline_overlay:     $("#scanline_overlay"),
     cinematic_auto:       $("#cinematic_auto"),
-    visual_mode:          visualModeGroup
+    visual_mode:          visualModeGroup,
+    lyrics_bg:            lyricsBgGroup
   };
 
   var statusBar = $("#status-bar");
@@ -79,6 +85,7 @@
         var vm = s.visual_mode;
         if (vm !== "canvas_card" && vm !== "canvas_bg" && vm !== "artwork") vm = "canvas_card";
         fields.visual_mode.value = vm;
+        fields.lyrics_bg.value = s.lyrics_bg === "dark" ? "dark" : "media";
       })
       .catch(function (e) {
         console.error("[Settings] Load error:", e);
@@ -98,7 +105,8 @@
       cpu_threshold:        parseInt(fields.cpu_threshold.value, 10),
       scanline_overlay:     fields.scanline_overlay.checked,
       cinematic_auto:       fields.cinematic_auto.checked,
-      visual_mode:          fields.visual_mode.value
+      visual_mode:          fields.visual_mode.value,
+      lyrics_bg:            fields.lyrics_bg.value
     };
 
     fetch("/api/settings", {
@@ -215,10 +223,19 @@
   var adjustMode     = false;
   var SLIDER_STEP    = 5;
   var NAV_DETENT_MS  = 110;
-  var MULTI_PRESS_MS = 350;
+  var ENC_PRESS_BASE_MS   = 520;
+  var ENC_PRESS_EXTEND_MS = 240;
+  var ENC_PRESS_MAX_MS    = 1600;
   var lastNavTs      = 0;
   var pressCount     = 0;
   var pressTimer     = null;
+
+  function encPressWaitMs(count) {
+    return Math.min(
+      ENC_PRESS_BASE_MS + (count - 1) * ENC_PRESS_EXTEND_MS,
+      ENC_PRESS_MAX_MS
+    );
+  }
 
   function buildNavList() {
     navList = $$(".settings-page .vm-tile, "
@@ -305,7 +322,7 @@
       } else {
         activateCurrent();
       }
-    }, MULTI_PRESS_MS);
+    }, encPressWaitMs(pressCount));
   }
 
   window.addEventListener("keydown", function (e) {

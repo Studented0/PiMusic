@@ -3,9 +3,16 @@ import time
 import traceback
 from curl_cffi import requests as cffi_requests
 from spotipy.exceptions import SpotifyException
-from album_cache import cache_art, get_dominant_color
+from album_cache import cache_art, get_cached_bg, get_dominant_color
 from scrobbler import update as scrobbler_update, reset as scrobbler_reset
 from spotify_auth import get_web_player_tokens, start_wp_token_refresh
+
+
+def _scrobbler_active():
+    """Only the active source's poller may drive the scrobbler, otherwise the
+    idle poller resets/advances the other source's scrobble progress."""
+    import source_manager  # late import -- source_manager imports this module
+    return source_manager.get_active_source() == "spotify"
 
 # Rate limit: when 429 received, back off completely. Retry-After can be 76k+ seconds.
 _rate_limited_until = 0.0
@@ -18,6 +25,7 @@ _current_data = {
     "album": "",
     "album_art_url": "",
     "album_art_local": "",
+    "bg_art_local": "",
     "dominant_color": "#1a1a2e",
     "progress_ms": 0,
     "duration_ms": 0,
@@ -26,6 +34,9 @@ _current_data = {
     "device": "",
     "track_id": "",
     "canvas_url": None,
+    "shuffle_state": False,
+    "repeat_state": "off",
+    "is_saved": False,
     "server_time": 0,
     "track_changed_at": 0,
 }
@@ -36,17 +47,36 @@ _canvas_lock = threading.Lock()
 _CANVAS_CACHE_MAX_ENTRIES = 256
 
 
+_canvas_prefetch_hook = None
+
+
+def set_canvas_prefetch_hook(fn):
+    """Register a callable(track_id) invoked whenever a canvas CDN URL is
+    resolved, so the server can pre-download the MP4 bytes in the background
+    instead of blocking the Pi's first /api/canvas request."""
+    global _canvas_prefetch_hook
+    _canvas_prefetch_hook = fn
+
+
 def _canvas_cache_store(track_id: str, cdn_url):
     """Bounded FIFO-style insert (dict preserves insertion order in Py3.7+)."""
     with _canvas_lock:
         if len(_canvas_cache) >= _CANVAS_CACHE_MAX_ENTRIES and track_id not in _canvas_cache:
             _canvas_cache.pop(next(iter(_canvas_cache)))
         _canvas_cache[track_id] = cdn_url
+    if cdn_url and _canvas_prefetch_hook:
+        try:
+            _canvas_prefetch_hook(track_id)
+        except Exception as e:
+            print(f"Canvas prefetch hook error: {e}")
 _active_device_id = None
 _sp_ref = None
 
 _art_inflight = set()
 _art_inflight_lock = threading.Lock()
+
+_saved_inflight = set()
+_saved_inflight_lock = threading.Lock()
 
 _last_play_cmd = 0.0
 _last_pause_cmd = 0.0
@@ -77,6 +107,11 @@ def _check_rate_limited():
     """True if we should not make any Spotify API calls."""
     with _rate_limit_lock:
         return time.time() < _rate_limited_until
+
+
+def check_rate_limited():
+    """Public wrapper for other modules (library endpoints)."""
+    return _check_rate_limited()
 
 
 def _set_rate_limited(retry_after_sec=None):
@@ -112,6 +147,51 @@ def _handle_429(e):
         _set_rate_limited(None)
         return True
     return False
+
+
+def handle_429(e):
+    """Public wrapper for other modules (library endpoints)."""
+    return _handle_429(e)
+
+
+# After a command, Spotify's API can return pre-command state for a second
+# or two. Polls inside this grace window must not overwrite the optimistic
+# fields, or the UI flickers back to the old state ("revert then correct").
+_optimistic_until = 0.0
+_OPTIMISTIC_GRACE_SEC = 2.5
+_OPTIMISTIC_FIELDS = (
+    "is_playing", "progress_ms", "volume",
+    "shuffle_state", "repeat_state", "server_time",
+)
+
+
+def _mark_optimistic():
+    global _optimistic_until
+    _optimistic_until = time.time() + _OPTIMISTIC_GRACE_SEC
+
+
+def _apply_local_playback(is_playing=None, progress_ms=None, volume=None):
+    """Optimistically update local state right after a successful command so
+    /api/state reflects it immediately instead of waiting for the next poll
+    (the main cause of 'volume is janky' and 'slow to update')."""
+    now = time.time()
+    _mark_optimistic()
+    with _lock:
+        if _current_data.get("track_id"):
+            cur = _current_data.get("progress_ms", 0) or 0
+            sampled = _current_data.get("server_time") or now
+            if _current_data.get("is_playing"):
+                elapsed = max(0.0, now - sampled) * 1000.0
+                cur = cur + elapsed
+                dur = _current_data.get("duration_ms", 0) or 0
+                if dur:
+                    cur = min(cur, dur)
+            _current_data["progress_ms"] = int(progress_ms if progress_ms is not None else cur)
+            _current_data["server_time"] = now
+            if is_playing is not None:
+                _current_data["is_playing"] = is_playing
+        if volume is not None:
+            _current_data["volume"] = max(0, min(100, int(volume)))
 
 
 def _canvas_proxy_url(track_id):
@@ -331,10 +411,12 @@ def _spawn_art_cache(track_id, art_url):
 
     def _work():
         local = None
+        bg_local = None
         color = None
         try:
             local = cache_art(art_url)
             if local:
+                bg_local = get_cached_bg(art_url)
                 color = get_dominant_color(art_url)
         except Exception:
             pass
@@ -347,8 +429,40 @@ def _spawn_art_cache(track_id, art_url):
             if _current_data.get("track_id") != track_id:
                 return
             _current_data["album_art_local"] = "/art/" + local
+            _current_data["bg_art_local"] = ("/art/" + bg_local) if bg_local else ""
             if color and color != "#1a1a2e":
                 _current_data["dominant_color"] = color
+
+    threading.Thread(target=_work, daemon=True).start()
+
+
+def _spawn_saved_check(sp, track_id):
+    """Check whether the track is in the user's Liked Songs (async, once per
+    track change). Writes is_saved into _current_data if still current."""
+    if not track_id or _check_rate_limited():
+        return
+    with _saved_inflight_lock:
+        if track_id in _saved_inflight:
+            return
+        _saved_inflight.add(track_id)
+
+    def _work():
+        saved = None
+        try:
+            res = sp.current_user_saved_tracks_contains([track_id])
+            if isinstance(res, list) and res:
+                saved = bool(res[0])
+        except Exception as e:
+            if not _handle_429(e):
+                print(f"Saved check failed for {track_id}: {e}")
+        finally:
+            with _saved_inflight_lock:
+                _saved_inflight.discard(track_id)
+        if saved is None:
+            return
+        with _lock:
+            if _current_data.get("track_id") == track_id:
+                _current_data["is_saved"] = saved
 
     threading.Thread(target=_work, daemon=True).start()
 
@@ -376,6 +490,8 @@ def _do_poll(sp):
             is_playing = pb.get("is_playing", False)
             progress = pb.get("progress_ms", 0)
             duration = item.get("duration_ms", 0)
+            shuffle_state = bool(pb.get("shuffle_state", False))
+            repeat_state = pb.get("repeat_state") or "off"
 
             device = pb.get("device", {})
             device_name = device.get("name", "Unknown")
@@ -389,45 +505,63 @@ def _do_poll(sp):
             with _lock:
                 prev_tid = _previous_track_id
                 prev_local = _current_data.get("album_art_local", "")
+                prev_bg = _current_data.get("bg_art_local", "")
                 prev_color = _current_data.get("dominant_color", "#1a1a2e")
                 prev_changed_at = _current_data.get("track_changed_at", 0)
 
             track_changed = track_id != prev_tid
 
             if track_changed:
-                scrobbler_reset()
+                if _scrobbler_active():
+                    scrobbler_reset()
                 local_art_path = ""
+                bg_art_path = ""
                 color = "#1a1a2e"
                 track_changed_at = now
                 with _lock:
                     _current_data["canvas_url"] = None
+                    _current_data["is_saved"] = False
                 _fetch_canvas_graphql(track_id)
+                _spawn_saved_check(sp, track_id)
             else:
                 local_art_path = prev_local
+                bg_art_path = prev_bg
                 color = prev_color
                 track_changed_at = prev_changed_at
 
-            scrobbler_update(track_id, track_name, artists, duration, is_playing, progress)
+            if _scrobbler_active():
+                scrobbler_update(track_id, track_name, artists, duration, is_playing, progress)
+
+            update = {
+                "artist": artists,
+                "track": track_name,
+                "album": album_name,
+                "album_art_url": art_url,
+                "album_art_local": local_art_path,
+                "bg_art_local": bg_art_path,
+                "dominant_color": color,
+                "progress_ms": progress,
+                "duration_ms": duration,
+                "is_playing": is_playing,
+                "volume": volume,
+                "device": device_name,
+                "track_id": track_id,
+                "shuffle_state": shuffle_state,
+                "repeat_state": repeat_state,
+                "server_time": now,
+                "track_changed_at": track_changed_at,
+            }
+            # Inside the post-command grace window, a poll may carry stale
+            # pre-command values -- keep the optimistic fields instead.
+            # A track change is always authoritative.
+            if not track_changed and time.time() < _optimistic_until:
+                for key in _OPTIMISTIC_FIELDS:
+                    update.pop(key, None)
 
             with _lock:
                 if my_id != _poll_counter:
                     return
-                _current_data.update({
-                    "artist": artists,
-                    "track": track_name,
-                    "album": album_name,
-                    "album_art_url": art_url,
-                    "album_art_local": local_art_path,
-                    "dominant_color": color,
-                    "progress_ms": progress,
-                    "duration_ms": duration,
-                    "is_playing": is_playing,
-                    "volume": volume,
-                    "device": device_name,
-                    "track_id": track_id,
-                    "server_time": now,
-                    "track_changed_at": track_changed_at,
-                })
+                _current_data.update(update)
                 if track_changed:
                     _previous_track_id = track_id
 
@@ -454,6 +588,9 @@ def _do_poll(sp):
 
 
 def _poll_loop(sp):
+    # Device grab happens here (not in start_polling) so server startup
+    # doesn't block on a Spotify API round-trip.
+    _grab_device(sp)
     while True:
         if _check_rate_limited():
             with _rate_limit_lock:
@@ -474,7 +611,6 @@ def _poll_loop(sp):
 def start_polling(sp):
     global _sp_ref
     _sp_ref = sp
-    _grab_device(sp)
     t = threading.Thread(target=_poll_loop, args=(sp,), daemon=True)
     t.start()
 
@@ -482,6 +618,15 @@ def start_polling(sp):
 def get_current_data():
     with _lock:
         d = dict(_current_data)
+    # Extrapolate progress between polls so /api/state is never up to
+    # POLL_INTERVAL seconds stale (root cause of the pause snap-to-0 bug:
+    # the frontend resynced to old progress values).
+    if d.get("is_playing") and (d.get("duration_ms") or 0) > 0 and d.get("server_time"):
+        now = time.time()
+        elapsed_ms = (now - d["server_time"]) * 1000.0
+        if 0 < elapsed_ms < 60_000:
+            d["progress_ms"] = int(min((d.get("progress_ms") or 0) + elapsed_ms, d["duration_ms"]))
+        d["server_time"] = now
     with _rate_limit_lock:
         d["rate_limited_until"] = _rate_limited_until if _rate_limited_until > time.time() else 0
     tid = d.get("track_id", "")
@@ -518,6 +663,8 @@ def play(sp):
     _last_play_cmd = now
     try:
         sp.start_playback()
+        _apply_local_playback(is_playing=True)
+        force_poll()
         return True
     except Exception as e:
         if _handle_429(e):
@@ -531,6 +678,8 @@ def play(sp):
             if dev:
                 try:
                     sp.start_playback(device_id=dev)
+                    _apply_local_playback(is_playing=True)
+                    force_poll()
                     return True
                 except Exception as e2:
                     print("Play retry failed: " + str(e2))
@@ -549,6 +698,8 @@ def pause(sp):
     _last_pause_cmd = now
     try:
         sp.pause_playback()
+        _apply_local_playback(is_playing=False)
+        force_poll()
         return True
     except Exception as e:
         if _handle_429(e):
@@ -562,6 +713,8 @@ def pause(sp):
             if dev:
                 try:
                     sp.pause_playback(device_id=dev)
+                    _apply_local_playback(is_playing=False)
+                    force_poll()
                     return True
                 except Exception as e2:
                     print("Pause retry failed: " + str(e2))
@@ -635,6 +788,8 @@ def previous_track(sp):
 def seek_track(sp, position_ms):
     try:
         sp.seek_track(position_ms)
+        _apply_local_playback(progress_ms=int(position_ms))
+        force_poll()
         return True
     except Exception as e:
         print("Seek failed: " + str(e))
@@ -650,10 +805,88 @@ def set_volume(sp, volume_percent):
             sp.volume(vol, device_id=dev)
         else:
             sp.volume(vol)
+        # Reflect immediately -- waiting for the next poll made the slider
+        # snap back to the old value ("volume is janky" known issue).
+        _apply_local_playback(volume=vol)
         return True
     except Exception as e:
         print("Volume failed: " + str(e))
         return False
+
+
+def set_shuffle(sp, state):
+    """Set shuffle on/off. Optimistic local update + force-poll to confirm."""
+    if _check_rate_limited():
+        return False
+    state = bool(state)
+    with _lock:
+        dev = _active_device_id
+    try:
+        if dev:
+            sp.shuffle(state, device_id=dev)
+        else:
+            sp.shuffle(state)
+        _mark_optimistic()
+        with _lock:
+            _current_data["shuffle_state"] = state
+        force_poll()
+        return True
+    except Exception as e:
+        if _handle_429(e):
+            return False
+        print("Shuffle failed: " + str(e))
+        return False
+
+
+def set_repeat(sp, state):
+    """Set repeat mode: 'off' | 'context' | 'track'."""
+    if _check_rate_limited():
+        return False
+    if state not in ("off", "context", "track"):
+        return False
+    with _lock:
+        dev = _active_device_id
+    try:
+        if dev:
+            sp.repeat(state, device_id=dev)
+        else:
+            sp.repeat(state)
+        _mark_optimistic()
+        with _lock:
+            _current_data["repeat_state"] = state
+        force_poll()
+        return True
+    except Exception as e:
+        if _handle_429(e):
+            return False
+        print("Repeat failed: " + str(e))
+        return False
+
+
+def toggle_save(sp):
+    """Add/remove the current track from Liked Songs.
+    Returns (ok, new_saved_state)."""
+    if _check_rate_limited():
+        return False, None
+    with _lock:
+        track_id = _current_data.get("track_id", "")
+        saved = _current_data.get("is_saved", False)
+    if not track_id:
+        return False, None
+    try:
+        if saved:
+            sp.current_user_saved_tracks_delete([track_id])
+        else:
+            sp.current_user_saved_tracks_add([track_id])
+        with _lock:
+            if _current_data.get("track_id") == track_id:
+                _current_data["is_saved"] = not saved
+        return True, (not saved)
+    except Exception as e:
+        if _handle_429(e):
+            return False, None
+        print("Like toggle failed: " + str(e))
+        return False, None
 
 
 def fetch_canvas_for_external(track_id, callback):

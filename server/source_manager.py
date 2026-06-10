@@ -41,6 +41,7 @@ def _detect_loop():
             if time.time() < _manual_override_until:
                 continue
 
+        # Both checks read the pollers' in-memory state -- no network calls.
         spotify_playing = spotify_controller.is_playing_active()
         cider_playing = cider_controller.is_playing_active()
 
@@ -114,6 +115,8 @@ def dispatch_command(action, sp=None, **kwargs):
             "previous": cider_controller.previous_track,
             "seek": lambda: cider_controller.seek_track(kwargs.get("position_ms", 0)),
             "volume": lambda: cider_controller.set_volume(kwargs.get("volume", 50)),
+            "shuffle": lambda: cider_controller.set_shuffle(kwargs.get("state", False)),
+            "repeat": lambda: cider_controller.set_repeat(kwargs.get("state", "off")),
         }
     else:
         if not sp:
@@ -125,6 +128,8 @@ def dispatch_command(action, sp=None, **kwargs):
             "previous": lambda: spotify_controller.previous_track(sp),
             "seek": lambda: spotify_controller.seek_track(sp, kwargs.get("position_ms", 0)),
             "volume": lambda: spotify_controller.set_volume(sp, kwargs.get("volume", 50)),
+            "shuffle": lambda: spotify_controller.set_shuffle(sp, kwargs.get("state", False)),
+            "repeat": lambda: spotify_controller.set_repeat(sp, kwargs.get("state", "off")),
         }
 
     handler = handlers.get(action)

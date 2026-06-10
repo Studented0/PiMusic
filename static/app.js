@@ -19,6 +19,13 @@
     btnPrev:   $("#btn-prev"),
     iconPlay:  $("#icon-play"),
     iconPause: $("#icon-pause"),
+    btnShuffle: $("#btn-shuffle"),
+    btnRepeat:  $("#btn-repeat"),
+    iconRepeat:    $("#icon-repeat"),
+    iconRepeatOne: $("#icon-repeat-one"),
+    btnLike:        $("#btn-like"),
+    iconHeart:       $("#icon-heart"),
+    iconHeartFilled: $("#icon-heart-filled"),
     volSlider: $("#volume-slider"),
     device:    $("#device-name"),
     player:    $(".player"),
@@ -26,21 +33,23 @@
     sourceBadge: $("#source-badge"),
     sourceLabel: $("#source-label"),
     sourceIconSpotify: $("#source-icon-spotify"),
-    sourceIconCider:   $("#source-icon-cider"),
-    audio:     $("#audio-player")
+    sourceIconCider:   $("#source-icon-cider")
   };
 
-  console.error("[PiMusic] app.js v43 loaded at " + new Date().toISOString());
+  console.error("[PiMusic] app.js v45 loaded at " + new Date().toISOString());
 
   var POLL_MS            = 1000;
   var DRIFT_CORRECT_MS   = 1500;
   var TEXT_UPDATE_MS     = 200;
   var SNAPBACK_GUARD_MS  = 5000;
   var BTN_COOLDOWN_MS    = 500;
-  var INPUT_LOCK_MS      = 5000;
+  /* Server now applies volume/playback/seek optimistically, so these locks
+     only need to cover one polling round-trip instead of 5s. */
+  var VOL_LOCK_MS        = 1800;
+  var SEEK_LOCK_MS       = 2500;
   var STALE_EXTEND_MS    = 2000;
   var RENDER_MIN_INTERVAL_MS = 33;    // ~30 fps
-  var VOL_DEBOUNCE_MS    = 450;
+  var VOL_DEBOUNCE_MS    = 250;
 
   var state = {
     is_playing: false,
@@ -48,6 +57,7 @@
     duration_ms: 0,
     album_art_local: "",
     album_art_url: "",
+    bg_art_local: "",
     dominant_color: "#1a1a2e",
     track: "",
     artist: "",
@@ -58,6 +68,9 @@
     canvas_cdn_url: null,
     visual_type: "image",
     source: "spotify",
+    shuffle_state: false,
+    repeat_state: "off",
+    is_saved: false,
     server_time: 0,
     track_changed_at: 0,
     rate_limited_until: 0,
@@ -123,6 +136,16 @@
   var pollReqId          = 0;
   var playbackLockUntil  = 0;
   var pendingServerResync = false;
+  var pollInflight       = false;
+  var pollStartedTs      = 0;
+  var trackChangeListeners = [];
+  var serverBootId       = "";
+  var modeLockUntil      = 0;   // shuffle/repeat/like optimistic-update lock
+  var MODE_LOCK_MS       = 1500;
+  var prevShuffle        = null;
+  var prevRepeat         = null;
+  var prevSaved          = null;
+  var prevHeartVisible   = null;
 
   /* ── Predictive clock ─────────────────────────────────── */
 
@@ -186,152 +209,12 @@
     return m + ":" + (s < 10 ? "0" : "") + s;
   }
 
-  function realPost(url, body) {
+  function post(url, body) {
     return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: body ? JSON.stringify(body) : undefined
     }).catch(function () { return { ok: false }; });
-  }
-
-  // ── Client-side demo state ────────────────────────────────────
-  // When the page is served from Vercel, window.PIMUSIC_DEMO === true
-  // and window.PIMUSIC_PLAYLIST holds the resolved playlist. We keep
-  // all timing/skipping state in the browser so multi-instance
-  // serverless can't make it diverge between polls.
-
-  var demoEnabled = !!window.PIMUSIC_DEMO && !!window.PIMUSIC_PLAYLIST
-                    && window.PIMUSIC_PLAYLIST.length > 0;
-  var demoPlaylist = demoEnabled ? window.PIMUSIC_PLAYLIST : null;
-  var demoFirstCanvasIdx = -1;
-  if (demoEnabled) {
-    for (var di = 0; di < demoPlaylist.length; di++) {
-      if (demoPlaylist[di].canvas_url) { demoFirstCanvasIdx = di; break; }
-    }
-  }
-  var IDLE_AFTER_PAUSE_S = 15;
-  var demo = demoEnabled ? {
-    index: 0,
-    started_at: Date.now(),     // wallclock ms when current track started
-    is_playing: true,
-    paused_at: 0,
-    pause_progress_ms: 0,
-    volume: 40,                 // YouTube rips are loud; start lower
-    source: "spotify",
-    visual_mode: "canvas_card"
-  } : null;
-
-  function demoCurrent() { return demoPlaylist[demo.index % demoPlaylist.length]; }
-
-  function demoMaybeAdvance() {
-    if (!demo.is_playing) return;
-    while (true) {
-      var t = demoCurrent();
-      var elapsed = Date.now() - demo.started_at;
-      if (elapsed < t.duration_ms) return;
-      demo.started_at += t.duration_ms;
-      demo.index = (demo.index + 1) % demoPlaylist.length;
-    }
-  }
-
-  function demoProgressMs() {
-    if (!demo.is_playing) return demo.pause_progress_ms;
-    return Math.max(0, Date.now() - demo.started_at);
-  }
-
-  function demoIsIdle() {
-    return !demo.is_playing
-        && demo.paused_at > 0
-        && (Date.now() - demo.paused_at) > IDLE_AFTER_PAUSE_S * 1000;
-  }
-
-  function synthState() {
-    demoMaybeAdvance();
-    var t = demoCurrent();
-    var idleT = demoFirstCanvasIdx >= 0 ? demoPlaylist[demoFirstCanvasIdx] : t;
-    var idle = demoIsIdle();
-    var hasCanvas = !!t.canvas_url;
-    return {
-      track_id:           idle ? "" : t.track_id,
-      track:              idle ? "" : t.track,
-      artist:             idle ? "" : t.artist,
-      album:              idle ? "" : t.album,
-      album_art_url:      idle ? "" : t.album_art_url,
-      album_art_local:    idle ? "" : t.album_art_local,
-      canvas_url:         idle ? "" : t.canvas_url,
-      canvas_cdn_url:     idle ? "" : t.canvas_cdn_url,
-      audio_url:          idle ? "" : t.audio_url,
-      duration_ms:        idle ? 0  : t.duration_ms,
-      progress_ms:        idle ? 0  : demoProgressMs(),
-      is_playing:         demo.is_playing,
-      volume:             demo.volume,
-      device:             "PiMusic Demo",
-      source:             demo.source,
-      server_time:        Date.now() / 1000,
-      track_changed_at:   demo.started_at / 1000,
-      visual_mode:        demo.visual_mode,
-      visual_type:        (hasCanvas && !idle) ? "canvas_video" : "image",
-      cpu_throttled:      false,
-      rate_limited_until: 0,
-      dominant_color:     t.dominant_color,
-      idle_canvas_track_id: idleT.track_id,
-      idle_canvas_url:    idleT.canvas_url || "",
-      idle_canvas_cdn_url: idleT.canvas_cdn_url || ""
-    };
-  }
-
-  function demoApply(url, body) {
-    if (!demo) return;
-    body = body || {};
-    if (url === "/api/play" || (url === "/api/hid/input" && body.action === "play")) {
-      if (!demo.is_playing) {
-        demo.started_at = Date.now() - demo.pause_progress_ms;
-        demo.is_playing = true;
-        demo.paused_at = 0;
-      }
-    } else if (url === "/api/pause" || (url === "/api/hid/input" && body.action === "pause")) {
-      if (demo.is_playing) {
-        demo.pause_progress_ms = demoProgressMs();
-        demo.is_playing = false;
-        demo.paused_at = Date.now();
-      }
-    } else if (url === "/api/next") {
-      demo.index = (demo.index + 1) % demoPlaylist.length;
-      demo.started_at = Date.now();
-      demo.pause_progress_ms = 0;
-      if (!demo.is_playing) demo.paused_at = Date.now();
-    } else if (url === "/api/previous") {
-      // Match real player semantics: >3s in restarts the track,
-      // otherwise jump to the previous one.
-      if (demoProgressMs() > 3000) {
-        demo.started_at = Date.now();
-      } else {
-        demo.index = (demo.index - 1 + demoPlaylist.length) % demoPlaylist.length;
-        demo.started_at = Date.now();
-      }
-      demo.pause_progress_ms = 0;
-      if (!demo.is_playing) demo.paused_at = Date.now();
-    } else if (url === "/api/seek") {
-      var t = demoCurrent();
-      var pos = Math.max(0, Math.min(parseInt(body.position_ms, 10) || 0, t.duration_ms - 1));
-      demo.started_at = Date.now() - pos;
-      if (!demo.is_playing) {
-        demo.pause_progress_ms = pos;
-        demo.paused_at = Date.now();
-      }
-    } else if (url === "/api/volume") {
-      demo.volume = Math.max(0, Math.min(100, parseInt(body.volume, 10) || 0));
-    } else if (url === "/api/source") {
-      if (body.source === "spotify" || body.source === "cider") demo.source = body.source;
-    }
-  }
-
-  function post(url, body) {
-    if (demoEnabled) {
-      demoApply(url, body);
-      return Promise.resolve({ ok: true });
-    }
-    return realPost(url, body);
   }
 
   var emergencyPollTimer = null;
@@ -340,6 +223,12 @@
     emergencyPollTimer = setTimeout(function () {
       post("/api/force-poll").then(function () { poll(); });
     }, delayMs);
+  }
+
+  function syncLyricsMediaBg() {
+    if (window.PiMusicLyrics && window.PiMusicLyrics.syncMediaBg) {
+      window.PiMusicLyrics.syncMediaBg();
+    }
   }
 
   /* ── Canvas video ──────────────────────────────────────── */
@@ -366,6 +255,7 @@
     activeCanvasSrc = "";
     activeVisualType = "image";
     clearCanvas();
+    syncLyricsMediaBg();
   }
 
   function tryCanvasFallback(reason) {
@@ -389,6 +279,7 @@
       dom.canvas.classList.add("active");
       document.body.classList.add("has-canvas");
       dom.canvas.play().catch(function () {});
+      syncLyricsMediaBg();
     };
 
     dom.canvas.onerror = function () {
@@ -427,100 +318,7 @@
 
     dom.canvas.classList.remove("active");
     loadCanvasSrc(proxyUrl);
-  }
-
-  /* ── Audio sync (demo mode) ────────────────────────────────
-     Drives the hidden <audio> element off /api/state. The server
-     auto-advances tracks on time, so the audio just needs to follow:
-       - swap src when audio_url changes
-       - resync currentTime on next/prev/seek (track_changed_at moves)
-       - mirror is_playing (autoplay is browser-blocked until first click)
-       - mirror volume                                                    */
-
-  var lastAudioSrc = "";
-  var lastAudioPlaying = null;
-  var lastTrackChangedAt = null;
-
-  function syncAudio(data) {
-    if (!dom.audio) return;
-    var desired = data.audio_url || "";
-
-    if (desired !== lastAudioSrc) {
-      if (desired) {
-        dom.audio.src = desired;
-        dom.audio.load();
-      } else {
-        dom.audio.removeAttribute("src");
-        dom.audio.load();
-      }
-      lastAudioSrc = desired;
-      lastAudioPlaying = null;
-      lastTrackChangedAt = null;  // force seek-sync below
-    }
-
-    if (desired && data.track_changed_at !== lastTrackChangedAt) {
-      // data.progress_ms gets nulled by the seek lock right after a
-      // scrub — falling back to 0 here was sending audio back to the
-      // start every time you let go of the seek bar. Use the local
-      // clock instead, which already reflects the user's scrub target.
-      var targetMs = (data.progress_ms !== undefined && data.progress_ms !== null)
-        ? data.progress_ms
-        : clockNow();
-      try { dom.audio.currentTime = targetMs / 1000; } catch (e) {}
-      lastTrackChangedAt = data.track_changed_at;
-    }
-
-    if (typeof data.volume === "number") {
-      dom.audio.volume = Math.max(0, Math.min(1, data.volume / 100));
-    }
-
-    // Soft drift correction: re-anchor the visual clock to the audio
-    // element when they've drifted >250 ms apart. The audio is the
-    // canonical playback (it's what's actually playing), so it should
-    // win — but skip while the user is mid-scrub or the seek lock is
-    // active so we don't fight the user's intent.
-    if (desired && data.is_playing && !seekDragging
-        && performance.now() >= seekLockUntil
-        && !isNaN(dom.audio.currentTime) && dom.audio.currentTime > 0) {
-      var audioMs = dom.audio.currentTime * 1000;
-      if (Math.abs(audioMs - clockNow()) > 250) {
-        clockMs = audioMs;
-        clockAnchor = performance.now();
-        clockRate = 1.0;
-        driftTarget = null;
-      }
-    }
-
-    if (desired && lastAudioPlaying !== data.is_playing) {
-      if (data.is_playing) {
-        dom.audio.play().then(function () {
-          lastAudioPlaying = true;
-        }).catch(function () {
-          /* Autoplay blocked until first user gesture. Leave
-             lastAudioPlaying unchanged so the next poll retries — once
-             the user clicks play (or anything that triggers a poll
-             after a gesture), it'll go through. */
-        });
-      } else {
-        dom.audio.pause();
-        lastAudioPlaying = false;
-      }
-    }
-  }
-
-  // Audio file is often a few seconds shorter than Spotify's reported
-  // duration (album version vs deluxe, etc.). Without this, the track
-  // sits in silence until the wallclock catches up. End of audio ->
-  // skip to next so the demo flows naturally. Reuses prepareSkip for
-  // the same in-flight-poll race protection as a manual skip.
-  if (dom.audio) {
-    dom.audio.addEventListener("ended", function () {
-      if (state.is_playing && state.track_id) {
-        prepareSkip();
-        post("/api/next");
-        emergencyPoll(200);
-      }
-    });
+    syncLyricsMediaBg();
   }
 
   /* ── Source badge ──────────────────────────────────────── */
@@ -590,17 +388,44 @@
 
   /* ── Cinematic mode toggle ─────────────────────────────── */
 
+  /* The lyrics overlay can "borrow" the canvas <video> element to use as
+     its background (one decode pipeline -- a second <video> would be far
+     too heavy for the Pi). While borrowed, cinematic transitions must not
+     move the element; returnCanvas() re-homes it based on canvasMode. */
+  var canvasBorrowed = false;
+
+  function borrowCanvas(container) {
+    canvasBorrowed = true;
+    container.appendChild(dom.canvas);
+  }
+
+  function returnCanvas() {
+    if (!canvasBorrowed) return;
+    canvasBorrowed = false;
+    if (canvasMode) {
+      document.body.insertBefore(dom.canvas, document.body.firstChild);
+    } else {
+      artworkWrap.appendChild(dom.canvas);
+    }
+  }
+
   function enterCinematic() {
     canvasMode = true;
     document.body.classList.remove("canvas-background");
-    document.body.insertBefore(dom.canvas, document.body.firstChild);
+    if (!canvasBorrowed) {
+      document.body.insertBefore(dom.canvas, document.body.firstChild);
+    }
     document.body.classList.add("canvas-cinematic");
+    applyBgImage();
   }
 
   function exitCinematic() {
     canvasMode = false;
     document.body.classList.remove("canvas-cinematic");
-    artworkWrap.appendChild(dom.canvas);
+    if (!canvasBorrowed) {
+      artworkWrap.appendChild(dom.canvas);
+    }
+    applyBgImage();
   }
 
   /* Tap/click during the idle screensaver: dismiss it, kill the canvas,
@@ -664,14 +489,16 @@
     lastRenderTs = timestamp;
     clockTick();
 
+    /* Lyrics overlay hides the player — skip progress DOM work on Pi. */
+    if (window.PiMusicLyrics && window.PiMusicLyrics.isOpen && window.PiMusicLyrics.isOpen()) {
+      return;
+    }
+
     var p   = clockNow();
     var d   = state.duration_ms || 1;
     var pct = Math.min(1, Math.max(0, p / d));
 
-    // The seek lock is for ignoring stale server progress, not for
-    // freezing the visual — keep drawing the local clock so the bar
-    // doesn't sit frozen for the whole 5s after letting go of a scrub.
-    if (!seekDragging) {
+    if (!seekDragging && performance.now() >= seekLockUntil) {
       var pctRound = Math.round(pct * 10000);
       if (pctRound !== prevPct) {
         prevPct = pctRound;
@@ -729,19 +556,61 @@
       }
     }
 
+    /* Shuffle / repeat / heart (diff-guarded) */
+    if (dom.btnShuffle && state.shuffle_state !== prevShuffle) {
+      prevShuffle = state.shuffle_state;
+      dom.btnShuffle.classList.toggle("ctrl-btn--on", !!state.shuffle_state);
+    }
+    var repeatMode = state.repeat_state || "off";
+    if (dom.btnRepeat && repeatMode !== prevRepeat) {
+      prevRepeat = repeatMode;
+      dom.btnRepeat.classList.toggle("ctrl-btn--on", repeatMode !== "off");
+      dom.iconRepeat.classList.toggle("hidden", repeatMode === "track");
+      dom.iconRepeatOne.classList.toggle("hidden", repeatMode !== "track");
+    }
+    if (dom.btnLike) {
+      var heartVisible = state.source === "spotify" && !!state.track_id;
+      if (heartVisible !== prevHeartVisible) {
+        prevHeartVisible = heartVisible;
+        dom.btnLike.classList.toggle("hidden", !heartVisible);
+      }
+      if (state.is_saved !== prevSaved) {
+        prevSaved = state.is_saved;
+        dom.btnLike.classList.toggle("like-btn--on", !!state.is_saved);
+        dom.iconHeart.classList.toggle("hidden", !!state.is_saved);
+        dom.iconHeartFilled.classList.toggle("hidden", !state.is_saved);
+      }
+    }
+
     if (!volDragging && performance.now() > volLockUntil) {
       dom.volSlider.value = state.volume;
     }
 
     var primarySrc = state.album_art_local || state.album_art_url || "";
-    var artKey = (state.track_id || "") + "|" + primarySrc;
+    var bgSrc = state.bg_art_local || "";
+    var artKey = (state.track_id || "") + "|" + primarySrc + "|" + bgSrc;
     if (primarySrc && artKey !== prevRenderedArtKey) {
       prevRenderedArtKey = artKey;
-      loadAlbumArt(primarySrc, state.album_art_url || "");
+      loadAlbumArt(primarySrc, state.album_art_url || "", bgSrc);
     }
   }
 
-  function loadAlbumArt(primarySrc, directUrl) {
+  var currentArtSrc = "";
+  var currentBgSrc  = "";
+
+  /* Pick the bg-layer image for the current mode:
+     - normal layout: the server's small pre-blurred variant when available
+       (skips the very expensive full-screen CSS blur() on the Pi)
+     - cinematic: the full-res art (its filter shows the image sharp). */
+  function applyBgImage() {
+    if (!currentArtSrc && !currentBgSrc) return;
+    var usePreblur = !!currentBgSrc && !canvasMode;
+    var src = usePreblur ? currentBgSrc : currentArtSrc;
+    if (src) dom.bg.style.backgroundImage = 'url("' + src + '")';
+    document.body.classList.toggle("bg-preblurred", usePreblur);
+  }
+
+  function loadAlbumArt(primarySrc, directUrl, bgSrc) {
     var myToken = ++artLoadToken;
     var sources = [primarySrc];
     if (directUrl && directUrl !== primarySrc) sources.push(directUrl);
@@ -757,11 +626,10 @@
       var img = new Image();
       img.onload = function () {
         if (myToken !== artLoadToken) return;
-        dom.art.classList.remove("fresh");
-        void dom.art.offsetWidth;
         dom.art.src = src;
-        dom.art.classList.add("fresh");
-        dom.bg.style.backgroundImage = 'url("' + src + '")';
+        currentArtSrc = src;
+        currentBgSrc  = bgSrc || "";
+        applyBgImage();
         if (idx > 0) {
           console.warn("[PiMusic] ART: recovered via fallback source " + idx);
         }
@@ -781,14 +649,33 @@
   function poll() {
     pollReqId += 1;
     var myReqId = pollReqId;
-    var stateP = demoEnabled
-      ? Promise.resolve(synthState())
-      : fetch("/api/state").then(function (res) { return res.ok ? res.json() : null; });
-    return stateP.then(function (data) {
-      if (!data) return;
-      return Promise.resolve(data).then(function (data) {
+    pollInflight = true;
+    pollStartedTs = performance.now();
+    var pollDone = function () {
+      if (myReqId === pollReqId) pollInflight = false;
+    };
+    return fetch("/api/state").then(function (res) {
+      pollDone();
+      if (!res.ok) return;
+      return res.json().then(function (data) {
         if (myReqId !== pollReqId) return;
+
+        /* Server restarted (possibly with new code): reload the kiosk so
+           the Pi always runs the latest frontend. The 15s guard prevents
+           reload loops if the page itself just booted. */
+        if (data.server_boot_id) {
+          if (!serverBootId) {
+            serverBootId = data.server_boot_id;
+          } else if (serverBootId !== data.server_boot_id
+                     && performance.now() > 15000) {
+            console.error("[PiMusic] Server restarted -- reloading page");
+            window.location.reload();
+            return;
+          }
+        }
+
         var trackChanged = data.track_id && data.track_id !== state.track_id;
+        var idChanged = data.track_id !== undefined && data.track_id !== state.track_id;
 
         if (pendingSkip && trackChanged) {
           pendingSkip = false;
@@ -797,7 +684,10 @@
 
         var now = performance.now();
 
-        /* Volume lock */
+        /* Volume lock
+           NOTE: locked fields are *deleted*, not set to undefined --
+           Object.assign copies undefined values and used to wipe
+           state.progress_ms (the "progress jumps to 0 on pause" bug). */
         if (volDragging || now < volLockUntil) {
           data.volume = state.volume;
         } else if (volLockUntil > 0 && data.volume === volBeforeDrag) {
@@ -808,17 +698,25 @@
         /* Playback lock */
         if (now < playbackLockUntil && !trackChanged) {
           data.is_playing = state.is_playing;
-          data.progress_ms = undefined;
+          delete data.progress_ms;
         }
 
         /* Seek lock */
         if (seekDragging || (now < seekLockUntil && !trackChanged)) {
-          data.progress_ms = undefined;
+          delete data.progress_ms;
         } else if (seekLockUntil > 0 && !trackChanged && data.progress_ms !== undefined) {
           if (Math.abs(data.progress_ms - seekTarget) > 3000) {
             seekLockUntil = now + STALE_EXTEND_MS;
-            data.progress_ms = undefined;
+            delete data.progress_ms;
           }
+        }
+
+        /* Shuffle/repeat/like lock: keep optimistic values until the
+           server's optimistic state is guaranteed to be in the response */
+        if (now < modeLockUntil && !trackChanged) {
+          delete data.shuffle_state;
+          delete data.repeat_state;
+          delete data.is_saved;
         }
 
         var incomingCanvas   = data.canvas_url || null;
@@ -841,7 +739,11 @@
           disarmIdleInactivity();
         }
         var wasIdle = idleScreensaverActive;
-        idleScreensaverActive = isIdle && !!data.idle_canvas_url && !idleScreensaverDismissed;
+        /* Don't activate the screensaver under the library overlay -- the
+           fullscreen canvas would just burn CPU decoding behind it. */
+        idleScreensaverActive = isIdle && !!data.idle_canvas_url
+                             && !idleScreensaverDismissed
+                             && !window.PiMusicOverlayOpen;
 
         if (idleScreensaverActive) {
           incomingCanvas = data.idle_canvas_url;
@@ -855,6 +757,11 @@
           if (!canvasMode && visualMode !== "canvas_bg") enterCinematic();
         } else if (!idleScreensaverActive && wasIdle) {
           document.body.classList.remove("idle-screensaver");
+          /* Playback resumed out of the screensaver: leave the cinematic
+             state it auto-entered, back to the normal layout. */
+          if (!isIdle && canvasMode && visualMode !== "canvas_bg") {
+            exitCinematic();
+          }
         }
 
         var playingTransition = data.is_playing !== undefined
@@ -873,23 +780,42 @@
           dom.device.textContent = state.device || "No device";
         }
 
+        /* Notify listeners on ANY track id transition -- including to ""
+           (playback stopped) so e.g. the lyrics view doesn't keep showing
+           the previous song. trackChanged stays truthy-gated because the
+           clock/UI reset must not fire on brief idle blips during skips. */
+        if (idChanged) {
+          for (var ti = 0; ti < trackChangeListeners.length; ti++) {
+            try { trackChangeListeners[ti](state); } catch (err) {}
+          }
+        }
+
         if (trackChanged) {
           trackChangeLocalTs = now;
-          clockSet(state.progress_ms || 0);
+          clockSet(typeof data.progress_ms === "number" ? data.progress_ms : 0);
           trackEndPolled     = false;
           pendingServerResync = false;
           prevRenderedTitle  = "";
           prevRenderedArtist = "";
-        } else if (data.progress_ms !== undefined
+        } else if (typeof data.progress_ms === "number"
                    && (playingTransition || pendingServerResync)) {
           clockSet(data.progress_ms);
           pendingServerResync = false;
+        } else if (typeof data.progress_ms === "number") {
+          /* Continuous drift correction between polls (was dead code). */
+          if (state.is_playing) {
+            clockApplyDrift(data.progress_ms);
+          } else if (Math.abs(data.progress_ms - clockNow()) > 1500) {
+            /* Paused: rate-based drift can't progress, snap if clearly off
+               (e.g. someone seeked from their phone while paused). */
+            clockSet(data.progress_ms);
+          }
         }
 
         applyCanvas(incomingCanvas, incomingCdn, incomingVisual);
-        syncAudio(data);
       });
     }).catch(function (e) {
+      pollDone();
       console.error("[PiMusic] Poll error:", e);
       dom.player.classList.add("connecting");
       dom.device.textContent = "Reconnecting\u2026";
@@ -910,54 +836,32 @@
       state.is_playing = false;
       clockMs     = clockNow();
       clockAnchor = performance.now();
-      if (dom.audio) dom.audio.pause();
       post("/api/pause");
     } else {
       state.is_playing = true;
       clockAnchor = performance.now();
       clockRate   = 1.0;
       driftTarget = null;
-      // Kick off audio inside the user gesture so browsers don't block it.
-      if (dom.audio && dom.audio.src) dom.audio.play().catch(function () {});
       post("/api/play");
     }
     pendingServerResync = true;
     emergencyPoll(400);
   });
 
-  // Cleanup that runs on every skip — pause the old audio so it
-  // doesn't keep playing for ~400ms until the new src loads, and bump
-  // pollReqId so any in-flight regular poll (which carries OLD track
-  // data) gets orphaned when its response arrives.
-  function prepareSkip() {
-    pollReqId += 1;
-    if (dom.audio) {
-      dom.audio.pause();
-      dom.audio.removeAttribute("src");
-      dom.audio.load();
-    }
-    lastAudioSrc = "";
-    lastAudioPlaying = null;
-    lastTrackChangedAt = null;
+  dom.btnNext.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (isCooling()) return;
+    setCooldown(BTN_COOLDOWN_MS);
     pendingSkip = true;
     dom.trackInfo.classList.add("stale");
     state.canvas_url = null;
     state.canvas_cdn_url = null;
     state.visual_type = "image";
     applyCanvas(null, null, "image");
+    syncLyricsMediaBg();
     clockSet(0);
-    // Don't force is_playing=true here — backend next_track preserves
-    // play/pause state, so forcing it caused the play icon to flicker
-    // (flip to playing on click, then back to paused once the poll
-    // returned the real state).
+    state.is_playing = true;
     trackChangeLocalTs = performance.now();
-  }
-
-  dom.btnNext.addEventListener("click", function (e) {
-    e.stopPropagation();
-    if (isCooling()) return;
-    setCooldown(BTN_COOLDOWN_MS);
-    prepareSkip();
     post("/api/next");
     emergencyPoll(350);
   });
@@ -966,10 +870,59 @@
     e.stopPropagation();
     if (isCooling()) return;
     setCooldown(BTN_COOLDOWN_MS);
-    prepareSkip();
+    pendingSkip = true;
+    dom.trackInfo.classList.add("stale");
+    state.canvas_url = null;
+    state.canvas_cdn_url = null;
+    state.visual_type = "image";
+    applyCanvas(null, null, "image");
+    syncLyricsMediaBg();
+    clockSet(0);
+    state.is_playing = true;
+    trackChangeLocalTs = performance.now();
     post("/api/previous");
     emergencyPoll(350);
   });
+
+  /* Shuffle / repeat / like (Spotify-style toggles, optimistic) */
+  if (dom.btnShuffle) {
+    dom.btnShuffle.addEventListener("click", function (e) {
+      e.stopPropagation();
+      state.shuffle_state = !state.shuffle_state;
+      modeLockUntil = performance.now() + MODE_LOCK_MS;
+      post("/api/shuffle", { state: state.shuffle_state });
+    });
+  }
+
+  if (dom.btnRepeat) {
+    dom.btnRepeat.addEventListener("click", function (e) {
+      e.stopPropagation();
+      var next = state.repeat_state === "off" ? "context"
+               : (state.repeat_state === "context" ? "track" : "off");
+      state.repeat_state = next;
+      modeLockUntil = performance.now() + MODE_LOCK_MS;
+      post("/api/repeat", { state: next });
+    });
+  }
+
+  if (dom.btnLike) {
+    dom.btnLike.addEventListener("click", function (e) {
+      e.stopPropagation();
+      state.is_saved = !state.is_saved;
+      modeLockUntil = performance.now() + MODE_LOCK_MS;
+      post("/api/like").then(function (res) {
+        if (res && res.json) return res.json();
+        return { ok: false };
+      }).then(function (j) {
+        if (!j || !j.ok) {
+          state.is_saved = !state.is_saved;
+          showToast("Couldn't update Liked Songs");
+        } else {
+          showToast(j.is_saved ? "Added to Liked Songs" : "Removed from Liked Songs");
+        }
+      });
+    });
+  }
 
   /* Volume */
   dom.volSlider.addEventListener("pointerdown", function (e) {
@@ -980,18 +933,13 @@
   window.addEventListener("pointerup", function () {
     if (volDragging) {
       volDragging = false;
-      volLockUntil = performance.now() + INPUT_LOCK_MS;
+      volLockUntil = performance.now() + VOL_LOCK_MS;
     }
   });
 
   dom.volSlider.addEventListener("input", function (e) {
     e.stopPropagation();
     state.volume = parseInt(e.target.value, 10);
-    // Update the audio element immediately so the slider feels live —
-    // otherwise volume only changes on the next poll tick (~1s).
-    if (dom.audio) {
-      dom.audio.volume = Math.max(0, Math.min(1, state.volume / 100));
-    }
     clearTimeout(volTimer);
     volTimer = setTimeout(function () {
       post("/api/volume", { volume: state.volume });
@@ -1028,12 +976,7 @@
     if (!seekDragging) return;
     seekDragging = false;
     var posMs = seekFromEvent(e);
-    seekLockUntil = performance.now() + INPUT_LOCK_MS;
-    // Move audio immediately so it doesn't lag behind the visual
-    // until the server round-trip completes (~500ms).
-    if (dom.audio && dom.audio.src) {
-      try { dom.audio.currentTime = posMs / 1000; } catch (err) {}
-    }
+    seekLockUntil = performance.now() + SEEK_LOCK_MS;
     clearTimeout(seekTimer);
     seekTimer = setTimeout(function () {
       post("/api/seek", { position_ms: posMs });
@@ -1044,7 +987,7 @@
 
   dom.bar.addEventListener("pointercancel", function () {
     seekDragging = false;
-    seekLockUntil = performance.now() + INPUT_LOCK_MS;
+    seekLockUntil = performance.now() + SEEK_LOCK_MS;
   });
 
   /* Click artwork:
@@ -1119,9 +1062,19 @@
 
   /* ── Rotary encoder (global keyboard) ──────────────────── */
 
-  var MULTI_PRESS_MS = 350;
+  /* Encoder multi-press: base window grows with each extra click in the burst. */
+  var ENCODER_PRESS_BASE_MS   = 520;
+  var ENCODER_PRESS_EXTEND_MS = 240;
+  var ENCODER_PRESS_MAX_MS    = 1600;
   var encoderPressCount = 0;
   var encoderPressTimer = null;
+
+  function encoderPressWaitMs(count) {
+    return Math.min(
+      ENCODER_PRESS_BASE_MS + (count - 1) * ENCODER_PRESS_EXTEND_MS,
+      ENCODER_PRESS_MAX_MS
+    );
+  }
 
   function encoderButtonPressed() {
     encoderPressCount++;
@@ -1129,21 +1082,34 @@
     encoderPressTimer = setTimeout(function () {
       var n = encoderPressCount;
       encoderPressCount = 0;
-      if (n >= 4)       window.location.href = "/settings";
-      else if (n === 3) dom.btnPrev.click();
+      if (n >= 6)       window.location.href = "/settings";
+      else if (n === 5) {
+        if (window.PiMusicLibrary && window.PiMusicLibrary.openSearch) {
+          window.PiMusicLibrary.openSearch(true);
+        }
+      } else if (n === 4) {
+        if (window.PiMusicLyrics && window.PiMusicLyrics.toggle) {
+          window.PiMusicLyrics.toggle();
+        }
+      } else if (n === 3) dom.btnPrev.click();
       else if (n === 2) dom.btnNext.click();
       else              dom.btnPlay.click();
-    }, MULTI_PRESS_MS);
+    }, encoderPressWaitMs(encoderPressCount));
   }
 
   window.addEventListener("keydown", function (e) {
     if (e.repeat) return;
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+    /* Library overlay owns encoder input; lyrics keeps global transport. */
+    if (window.PiMusicOverlayOpen) return;
+    var volUp   = e.key === "ArrowUp"   || e.key === "AudioVolumeUp"   || e.key === "VolumeUp";
+    var volDown = e.key === "ArrowDown" || e.key === "AudioVolumeDown" || e.key === "VolumeDown";
+    if (volUp || volDown) {
       e.preventDefault();
+      volBeforeDrag = state.volume;
       state.volume = Math.max(0, Math.min(100,
-        state.volume + (e.key === "ArrowUp" ? 2 : -2)));
+        state.volume + (volUp ? 2 : -2)));
       dom.volSlider.value = state.volume;
-      volLockUntil = performance.now() + INPUT_LOCK_MS;
+      volLockUntil = performance.now() + VOL_LOCK_MS;
       dom.volSlider.dispatchEvent(new Event("input"));
     } else if (e.key === " ") {
       e.preventDefault();
@@ -1161,6 +1127,54 @@
   console.error("[PiMusic] Boot: starting poll + render loop");
   dom.player.classList.add("connecting");
   poll();
-  setInterval(poll, POLL_MS);
+  setInterval(function () {
+    /* Don't stack requests when the previous poll is still in flight
+       (slow Pi / network) -- but never starve for more than 4s. */
+    if (pollInflight && performance.now() - pollStartedTs < 4000) return;
+    poll();
+  }, POLL_MS);
   requestAnimationFrame(render);
+
+  /* ── Public API for library.js / lyrics.js ────────────── */
+
+  var toastEl = document.getElementById("pim-toast");
+  var toastTimer = null;
+  function showToast(msg) {
+    if (!toastEl) return;
+    toastEl.textContent = msg;
+    toastEl.classList.remove("hidden");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () {
+      toastEl.classList.add("hidden");
+    }, 1800);
+  }
+
+  /* Programmatic seek (e.g. tapping a lyric line): must move the predictive
+     clock and arm the seek lock exactly like a progress-bar scrub, or the
+     next poll snaps the position right back. */
+  function seekTo(posMs) {
+    posMs = Math.max(0, Math.min(Math.round(posMs), state.duration_ms || 0));
+    clockSet(posMs);
+    seekTarget = posMs;
+    seekLockUntil = performance.now() + SEEK_LOCK_MS;
+    pendingServerResync = true;
+    post("/api/seek", { position_ms: posMs });
+    emergencyPoll(500);
+  }
+
+  window.PiMusic = {
+    getState: function () { return state; },
+    isCanvasActive: function () {
+      return dom.canvas.classList.contains("active") && !!dom.canvas.getAttribute("src");
+    },
+    clockNow: clockNow,
+    post: post,
+    fmt: fmt,
+    seek: seekTo,
+    emergencyPoll: emergencyPoll,
+    toast: showToast,
+    borrowCanvas: borrowCanvas,
+    returnCanvas: returnCanvas,
+    onTrackChange: function (cb) { trackChangeListeners.push(cb); }
+  };
 })();

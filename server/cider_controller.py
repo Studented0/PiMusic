@@ -9,8 +9,14 @@ import traceback
 
 import requests
 
-from album_cache import cache_art, get_dominant_color
+from album_cache import cache_art, get_cached_bg, get_dominant_color
 from scrobbler import update as scrobbler_update, reset as scrobbler_reset
+
+
+def _scrobbler_active():
+    """Only the active source's poller may drive the scrobbler."""
+    import source_manager  # late import -- source_manager imports this module
+    return source_manager.get_active_source() == "cider"
 
 CIDER_BASE = "http://127.0.0.1:10767"
 CIDER_TOKEN = ""
@@ -24,6 +30,7 @@ _current_data = {
     "album": "",
     "album_art_url": "",
     "album_art_local": "",
+    "bg_art_local": "",
     "dominant_color": "#1a1a2e",
     "progress_ms": 0,
     "duration_ms": 0,
@@ -34,12 +41,17 @@ _current_data = {
     "canvas_url": None,
     "canvas_cdn_url": None,
     "visual_type": "image",
+    "shuffle_state": False,
+    "repeat_state": "off",
+    "is_saved": False,
     "server_time": 0,
     "track_changed_at": 0,
 }
 _lock = threading.Lock()
 _previous_track_id = None
 _polling_active = False
+_volume_poll_counter = 0
+_VOLUME_POLL_EVERY = 4  # fetch real volume every Nth poll (~2s at 0.5s polls)
 
 _art_inflight = set()
 _art_inflight_lock = threading.Lock()
@@ -92,18 +104,32 @@ def is_available():
 
 
 def is_playing_active():
-    """Quick check – is Cider currently playing something?"""
+    """Quick check – is Cider currently playing something?
+    Reads the poller's state instead of making an HTTP call, so the source
+    auto-detect loop costs nothing (the poller refreshes every 0.5s anyway)."""
+    with _lock:
+        return _current_data.get("is_playing", False)
+
+
+def _fetch_volume():
+    """Read the real Cider volume (0-100) or None on failure."""
     try:
         resp = requests.get(
-            CIDER_BASE + "/api/v1/playback/is-playing",
+            CIDER_BASE + "/api/v1/playback/volume",
             headers=_headers(),
             timeout=2,
         )
         if resp.status_code == 200:
-            return resp.json().get("is_playing", False)
+            vol = (resp.json() or {}).get("volume")
+            if vol is None:
+                return None
+            vol = float(vol)
+            if vol <= 1.0:
+                vol *= 100.0
+            return max(0, min(100, int(round(vol))))
     except Exception:
         pass
-    return False
+    return None
 
 
 # ── Track name normalization for better Spotify search ────
@@ -276,10 +302,12 @@ def _spawn_art_cache(track_id, art_url):
 
     def _work():
         local = None
+        bg_local = None
         color = None
         try:
             local = cache_art(art_url)
             if local:
+                bg_local = get_cached_bg(art_url)
                 color = get_dominant_color(art_url)
         except Exception:
             pass
@@ -292,6 +320,7 @@ def _spawn_art_cache(track_id, art_url):
             if _current_data.get("track_id") != track_id:
                 return
             _current_data["album_art_local"] = "/art/" + local
+            _current_data["bg_art_local"] = ("/art/" + bg_local) if bg_local else ""
             if color and color != "#1a1a2e":
                 _current_data["dominant_color"] = color
 
@@ -299,7 +328,7 @@ def _spawn_art_cache(track_id, art_url):
 
 
 def _do_poll():
-    global _previous_track_id
+    global _previous_track_id, _volume_poll_counter
     try:
         resp = requests.get(
             CIDER_BASE + "/api/v1/playback/now-playing",
@@ -340,22 +369,57 @@ def _do_poll():
         song_id = catalog_id or opaque_id
         track_id = song_id or info.get("isrc", "")
 
-        is_playing = bool(info.get("status") is None or progress_ms > 0)
+        # Prefer an explicit playback state string when Cider provides one.
+        # Fallbacks must NOT default to "playing" -- the old heuristic was
+        # always-true when status was missing, so pause was never detected.
+        status = info.get("state") or info.get("status")
         remaining_ms = info.get("remainingTime", None)
-        if remaining_ms is not None:
+        if isinstance(status, str) and status.lower() in ("playing", "paused", "stopped"):
+            is_playing = status.lower() == "playing"
+        elif remaining_ms is not None:
             is_playing = remaining_ms > 0 and progress_ms > 0
+        else:
+            # No explicit signal at all: keep the previous value.
+            with _lock:
+                is_playing = _current_data.get("is_playing", False)
 
-        track_changed = track_id != _previous_track_id
+        # Real volume (was hardcoded 0, which reset the UI slider every poll).
+        volume = None
+        _volume_poll_counter += 1
+        if _volume_poll_counter >= _VOLUME_POLL_EVERY:
+            _volume_poll_counter = 0
+            volume = _fetch_volume()
+
+        # Shuffle/repeat: MusicKit conventions when the fields are present
+        # (shuffleMode 0/1, repeatMode 0=off 1=one 2=all). None = unknown,
+        # keep previous value.
+        shuffle_state = None
+        sm = info.get("shuffleMode")
+        if sm is not None:
+            shuffle_state = bool(sm)
+        repeat_state = None
+        rm = info.get("repeatMode")
+        if rm is not None:
+            repeat_state = {0: "off", 1: "track", 2: "context"}.get(rm, "off")
 
         with _lock:
+            prev_tid = _previous_track_id
             prev_local = _current_data.get("album_art_local", "")
+            prev_bg = _current_data.get("bg_art_local", "")
             prev_color = _current_data.get("dominant_color", "#1a1a2e")
             prev_changed_at = _current_data.get("track_changed_at", 0)
+            prev_volume = _current_data.get("volume", 0)
+            prev_shuffle = _current_data.get("shuffle_state", False)
+            prev_repeat = _current_data.get("repeat_state", "off")
+
+        track_changed = track_id != prev_tid
 
         if track_changed:
             print(f"[Cider] Track changed: {artist} - {track_name}", flush=True)
-            scrobbler_reset()
+            if _scrobbler_active():
+                scrobbler_reset()
             local_art_path = ""
+            bg_art_path = ""
             color = "#1a1a2e"
             track_changed_at = now
             with _lock:
@@ -367,6 +431,7 @@ def _do_poll():
                 _search_spotify_canvas(track_name, artist, track_id)
         else:
             local_art_path = prev_local
+            bg_art_path = prev_bg
             color = prev_color
             track_changed_at = prev_changed_at
 
@@ -377,13 +442,16 @@ def _do_poll():
                 "album": album_name,
                 "album_art_url": art_url,
                 "album_art_local": local_art_path,
+                "bg_art_local": bg_art_path,
                 "dominant_color": color,
                 "progress_ms": progress_ms,
                 "duration_ms": duration_ms,
                 "is_playing": is_playing,
-                "volume": 0,
+                "volume": volume if volume is not None else prev_volume,
                 "device": "Cider",
                 "track_id": track_id,
+                "shuffle_state": shuffle_state if shuffle_state is not None else prev_shuffle,
+                "repeat_state": repeat_state if repeat_state is not None else prev_repeat,
                 "server_time": now,
                 "track_changed_at": track_changed_at,
             })
@@ -393,7 +461,8 @@ def _do_poll():
         if art_url and (track_changed or not local_art_path):
             _spawn_art_cache(track_id, art_url)
 
-        scrobbler_update(track_id, track_name, artist, duration_ms, is_playing, progress_ms)
+        if _scrobbler_active():
+            scrobbler_update(track_id, track_name, artist, duration_ms, is_playing, progress_ms)
 
     except (requests.ConnectionError, requests.Timeout):
         with _lock:
@@ -486,10 +555,74 @@ def set_volume(volume_percent):
         requests.post(CIDER_BASE + "/api/v1/playback/volume",
                        json={"volume": vol},
                        headers=_headers(), timeout=5)
+        with _lock:
+            _current_data["volume"] = max(0, min(100, int(volume_percent)))
         return True
     except Exception as e:
         print(f"Cider volume failed: {e}")
         return False
+
+
+# Cider 2 has no shuffle/repeat *setters* -- only toggle endpoints plus
+# state getters (GET shuffle-mode -> 0/1, GET repeat-mode -> 0=off 1=one
+# 2=all, each toggle advancing the cycle by one). Setters are therefore
+# implemented as read-then-toggle.
+
+def _get_mode(path):
+    """Read a 0/1/2 mode value from a Cider state endpoint, or None."""
+    try:
+        resp = requests.get(CIDER_BASE + path, headers=_headers(), timeout=3)
+        if resp.status_code == 200:
+            val = (resp.json() or {}).get("value")
+            if val is not None:
+                return int(val)
+    except Exception:
+        pass
+    return None
+
+
+def _post_toggle(path):
+    try:
+        resp = requests.post(CIDER_BASE + path, headers=_headers(), timeout=5)
+        return 200 <= resp.status_code < 300
+    except Exception:
+        return False
+
+
+def set_shuffle(state):
+    """Set shuffle on Cider via read-then-toggle."""
+    desired = 1 if state else 0
+    current = _get_mode("/api/v1/playback/shuffle-mode")
+    if current is None:
+        print("Cider shuffle: could not read shuffle-mode")
+        return False
+    if current != desired and not _post_toggle("/api/v1/playback/toggle-shuffle"):
+        print("Cider shuffle: toggle failed")
+        return False
+    with _lock:
+        _current_data["shuffle_state"] = bool(state)
+    return True
+
+
+def set_repeat(state):
+    """Set repeat on Cider: 'off' | 'track' | 'context'.
+    Repeat-mode enum is 0=off, 1=one, 2=all; each toggle advances the
+    cycle by one, so toggle (target - current) % 3 times."""
+    target = {"off": 0, "track": 1, "context": 2}.get(state)
+    if target is None:
+        return False
+    current = _get_mode("/api/v1/playback/repeat-mode")
+    if current is None:
+        print("Cider repeat: could not read repeat-mode")
+        return False
+    presses = (target - current) % 3
+    for _ in range(presses):
+        if not _post_toggle("/api/v1/playback/toggle-repeat"):
+            print("Cider repeat: toggle failed")
+            return False
+    with _lock:
+        _current_data["repeat_state"] = state
+    return True
 
 
 # ══════════════════════════════════════════════════════════
