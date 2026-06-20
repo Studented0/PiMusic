@@ -13,6 +13,12 @@ A desk display for Spotify and Apple Music. Built with a Raspberry Pi 3B+ and a 
 
 
 ---
+## Finished Product
+<img width="4284" height="5712" alt="IMG_3090 (2)" src="https://github.com/user-attachments/assets/30e207dd-a3bd-4d86-9467-1db2b71d1236" />
+<img width="3264" height="2448" alt="IMG_0071" src="https://github.com/user-attachments/assets/55e84383-95bd-46a3-99dd-95aab1dfe2b4" />
+
+---
+
 ## Hardware
 
 Hyperpixel 4.0 rectangular slots directly on the raspberry pi’s 40 pin GPIO interface, no extra wiring is needed. Resolution is 800x480 via DPI. Software compositor is is smoother than GL driver on the Pi 3B+
@@ -58,7 +64,8 @@ Tap the lyrics icon to open synced lyrics for the current track (works for both 
 ## Fixed headaches (previously known issues)
 
 1. ~~App is slow to update sometimes~~ — server now applies play/pause/seek/volume optimistically and force-polls after every command; `/api/state` extrapolates progress between polls.
-2. ~~Progress goes to 0 when you pause then corrects itself~~ — frontend no longer wipes `progress_ms` during input locks, and drift correction between polls is actually wired up now.
+2. ~~Progress goes to 0 when you pause then corrects itself~~ — frontend no lon<img width="3264" height="2448" alt="IMG_0071" src="https://github.com/user-attachments/assets/9678a2a2-9c69-41d3-824a-f774bf6916a5" />
+ger wipes `progress_ms` during input locks, and drift correction between polls is actually wired up now.
 3. ~~Volume is janky and not realtime~~ — volume reflects instantly server-side (Cider volume was hardcoded to 0; now polled for real), and the UI lock dropped from 5s to 1.8s.
 4. Album art 404s — art was cached to `server/art_cache/` but served from `art_cache/`; unified (existing files migrate automatically).
 5. Startup no longer chokes the PC's network — heavy tasks are staggered, and the hidden token-capture Chromium uses a persistent profile and blocks images/media/fonts/analytics.
@@ -109,7 +116,7 @@ PiMusic/
 ```
 
 ---
-
+PLEASE LET ME KNOW IF YOU HAVE ANY SUGGESTIONS TO ADD AND OR BUGS
 ## License
 
 [MIT](LICENSE)
