@@ -65,10 +65,22 @@
     return node;
   }
 
+  var artEl = document.getElementById("lyrics-art");
+  var progressFillEl = document.getElementById("lyrics-progress-fill");
+  var appliedArtSrc = null;
+
   function setHeader() {
     var s = P.getState ? P.getState() : {};
     headTitle.textContent = s.track || "Lyrics";
     headSub.textContent = s.artist || "";
+    if (artEl) {
+      var src = s.album_art_local || s.album_art_url || "";
+      if (src !== appliedArtSrc) {
+        appliedArtSrc = src;
+        artEl.src = src;
+        artEl.style.visibility = src ? "visible" : "hidden";
+      }
+    }
   }
 
   var transportPlaying = null;
@@ -97,6 +109,11 @@
     if (tot !== timeTotText) {
       timeTotText = tot;
       timeTot.textContent = tot;
+    }
+    if (progressFillEl) {
+      var d = s.duration_ms || 0;
+      var pct = d ? Math.min(1, Math.max(0, P.clockNow() / d)) : 0;
+      progressFillEl.style.transform = "scaleX(" + pct + ")";
     }
   }
 

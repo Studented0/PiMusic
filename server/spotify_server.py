@@ -141,6 +141,7 @@ def api_state():
         data = demo_state.get_state()
         data["server_boot_id"] = _SERVER_BOOT_ID
         data["lyrics_bg"] = "media"
+        data["cinematic_auto"] = False
         return jsonify(data)
     cpu_throttle = resource_monitor.should_disable_video()
     data = source_manager.get_unified_state(cpu_override_image=cpu_throttle)
@@ -168,6 +169,7 @@ def api_state():
 
     data["server_boot_id"] = _SERVER_BOOT_ID
     data["lyrics_bg"] = _get_setting("lyrics_bg", "media")
+    data["cinematic_auto"] = bool(_get_setting("cinematic_auto", False))
     return jsonify(data)
 
 

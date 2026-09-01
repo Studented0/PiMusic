@@ -74,7 +74,8 @@
     server_time: 0,
     track_changed_at: 0,
     rate_limited_until: 0,
-    cpu_throttled: false
+    cpu_throttled: false,
+    cinematic_auto: false
   };
 
   var clockMs       = 0;
@@ -111,6 +112,10 @@
   var idleScreensaverDismissed = false;
   var idleInactivityTimer = null;
   var IDLE_RETURN_MS = 15000;
+
+  /* Cinematic auto-enter (touch kiosk) */
+  var lastInteractTs = Date.now();
+  var CINE_AUTO_MS = 20000;
 
   var barWidth = dom.bar.offsetWidth;
   if (window.ResizeObserver) {
@@ -427,6 +432,24 @@
     }
     applyBgImage();
   }
+
+  /* Track last touch for the cinematic auto-enter timer. */
+  document.addEventListener("pointerdown", function () {
+    lastInteractTs = Date.now();
+  }, true);
+
+  /* cinematic_auto: drift into cinematic after inactivity while a canvas
+     is playing (wired to the settings toggle). */
+  setInterval(function () {
+    if (!state.cinematic_auto || canvasMode) return;
+    if (visualMode === "canvas_bg") return;
+    if (!state.is_playing || !state.track_id) return;
+    if (!document.body.classList.contains("has-canvas")) return;
+    if (window.PiMusicOverlayOpen) return;
+    if (window.PiMusicLyrics && window.PiMusicLyrics.isOpen && window.PiMusicLyrics.isOpen()) return;
+    if (Date.now() - lastInteractTs < CINE_AUTO_MS) return;
+    enterCinematic();
+  }, 3000);
 
   /* Tap/click during the idle screensaver: dismiss it, kill the canvas,
      and fall back to the normal "No music playing" idle chrome.
@@ -927,6 +950,7 @@
   /* Volume */
   dom.volSlider.addEventListener("pointerdown", function (e) {
     e.stopPropagation();
+    lastInteractTs = Date.now();
     volDragging = true;
     volBeforeDrag = state.volume;
   });
@@ -939,6 +963,7 @@
 
   dom.volSlider.addEventListener("input", function (e) {
     e.stopPropagation();
+    lastInteractTs = Date.now();
     state.volume = parseInt(e.target.value, 10);
     clearTimeout(volTimer);
     volTimer = setTimeout(function () {
@@ -961,6 +986,7 @@
 
   dom.bar.addEventListener("pointerdown", function (e) {
     e.stopPropagation();
+    lastInteractTs = Date.now();
     seekDragging = true;
     seekLockUntil = Infinity;
     dom.bar.setPointerCapture(e.pointerId);
@@ -1013,52 +1039,47 @@
   document.addEventListener("pointerdown", onIdleActivity, true);
   document.addEventListener("keydown", onIdleActivity, true);
 
-  /* In cinematic: clicking player background exits, clicking controls doesn't */
+  /* Cinematic tap model (no accidental exits):
+       - taps on controls do their thing (they stopPropagation above)
+       - background taps only dismiss the idle screensaver; while music
+         plays the chrome stays put (exit via the collapse button only) */
+  function cineBackgroundTap() {
+    if (!canvasMode) return;
+    if (idleScreensaverActive) {
+      dismissIdleScreensaver();
+      exitCinematic();
+    }
+  }
   dom.player.addEventListener("click", function (e) {
     if (!canvasMode) return;
-    if (e.target === dom.player) {
-      dismissIdleScreensaver();
-      exitCinematic();
-    } else {
-      e.stopPropagation();
-    }
+    if (e.target === dom.player) cineBackgroundTap();
+    else e.stopPropagation();
   });
-
-  /* Click the fullscreen canvas video to exit */
   dom.canvas.addEventListener("click", function (e) {
-    if (canvasMode) {
-      e.stopPropagation();
-      dismissIdleScreensaver();
-      exitCinematic();
-    }
+    if (canvasMode) { e.stopPropagation(); cineBackgroundTap(); }
   });
-
-  /* Click the bg-layer or bg-overlay to exit (artwork-only fullscreen) */
   dom.bg.addEventListener("click", function (e) {
-    if (canvasMode) {
-      e.stopPropagation();
-      dismissIdleScreensaver();
-      exitCinematic();
-    }
+    if (canvasMode) { e.stopPropagation(); cineBackgroundTap(); }
   });
   var bgOverlay = $("#bg-overlay");
   if (bgOverlay) {
     bgOverlay.addEventListener("click", function (e) {
-      if (canvasMode) {
-        e.stopPropagation();
-        dismissIdleScreensaver();
-        exitCinematic();
-      }
+      if (canvasMode) { e.stopPropagation(); cineBackgroundTap(); }
     });
   }
-
-  /* Fallback: click body to exit */
   document.body.addEventListener("click", function () {
-    if (canvasMode) {
+    cineBackgroundTap();
+  });
+
+  /* Explicit exit: collapse button (topbar, visible only in cinematic) */
+  var cineExitBtn = document.getElementById("cine-exit-btn");
+  if (cineExitBtn) {
+    cineExitBtn.addEventListener("click", function (e) {
+      e.stopPropagation();
       dismissIdleScreensaver();
       exitCinematic();
-    }
-  });
+    });
+  }
 
   /* ── Rotary encoder (global keyboard) ──────────────────── */
 

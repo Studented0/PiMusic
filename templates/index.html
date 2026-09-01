@@ -1,10 +1,10 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
   <title>PiMusic</title>
-  <link rel="stylesheet" href="/static/style.css?v=63">
+  <link rel="stylesheet" href="/static/style.css?v=68">
 </head>
 <body data-demo="{{ '1' if demo_mode else '0' }}">
   {% if demo_mode %}<div class="demo-banner">DEMO MODE</div>{% endif %}
@@ -36,6 +36,9 @@
       </button>
       <button id="library-btn" class="topbar-icon-btn" title="Search &amp; Library" aria-label="Search and Library">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.49 4.49 0 0 1 9.5 14z"/></svg>
+      </button>
+      <button id="cine-exit-btn" class="topbar-icon-btn" title="Exit fullscreen" aria-label="Exit fullscreen">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/></svg>
       </button>
       <a href="/settings" class="settings-link" title="Settings">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/></svg>
@@ -121,54 +124,57 @@
     </div>
   </div>
 
-  <!-- Lyrics overlay -->
+  <!-- Lyrics overlay: art/info/controls left, lyrics right -->
   <div id="lyrics-overlay" class="overlay hidden">
     <div id="lyrics-bg" class="lyrics-bg"></div>
     <div class="lyrics-scrim"></div>
-    <div class="overlay-header">
-      <div class="lyrics-head">
-        <div id="lyrics-track-title" class="lyrics-head-title">Lyrics</div>
-        <div id="lyrics-track-sub" class="lyrics-head-sub"></div>
-      </div>
-      <div class="overlay-header-actions">
-        <button id="lyrics-search-btn" class="overlay-close" type="button" title="Search" aria-label="Search">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.49 4.49 0 0 1 9.5 14z"/></svg>
-        </button>
-        <button id="lyrics-close" class="overlay-close" type="button" aria-label="Close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-        </button>
-      </div>
+    <div class="lyrics-actions">
+      <button id="lyrics-search-btn" class="overlay-close" type="button" title="Search" aria-label="Search">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27a6.5 6.5 0 1 0-.7.7l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0A4.5 4.5 0 1 1 14 9.5 4.49 4.49 0 0 1 9.5 14z"/></svg>
+      </button>
+      <button id="lyrics-close" class="overlay-close" type="button" aria-label="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
     </div>
-    <div id="lyrics-content" class="lyrics-content"></div>
-    <div class="lyrics-transport-wrap">
-      <div class="lyrics-time" aria-live="polite">
-        <span id="lyrics-time-current">0:00</span>
-        <span class="lyrics-time-sep">/</span>
-        <span id="lyrics-time-total">0:00</span>
+    <div class="lyrics-split">
+      <div class="lyrics-left">
+        <div class="lyrics-art-wrap"><img id="lyrics-art" class="lyrics-art" src="" alt=""></div>
+        <div class="lyrics-head">
+          <div id="lyrics-track-title" class="lyrics-head-title">Lyrics</div>
+          <div id="lyrics-track-sub" class="lyrics-head-sub"></div>
+        </div>
+        <div class="lyrics-transport" aria-label="Playback controls">
+          <button id="lyrics-btn-prev" class="lyrics-transport-btn" type="button" aria-label="Previous">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
+          </button>
+          <button id="lyrics-btn-play" class="lyrics-transport-btn lyrics-transport-btn--main" type="button" aria-label="Play/Pause">
+            <svg id="lyrics-icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <svg id="lyrics-icon-pause" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
+          </button>
+          <button id="lyrics-btn-next" class="lyrics-transport-btn" type="button" aria-label="Next">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm10-12v12h2V6z"/></svg>
+          </button>
+        </div>
+        <div class="lyrics-progress" aria-live="polite">
+          <span id="lyrics-time-current">0:00</span>
+          <div class="lyrics-progress-bar"><div id="lyrics-progress-fill"></div></div>
+          <span id="lyrics-time-total">0:00</span>
+        </div>
+        <div class="lyrics-volume-wrap">
+          <svg class="vol-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.5v7a4.49 4.49 0 0 0 2.5-3.5zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg>
+          <input id="lyrics-volume-slider" type="range" min="0" max="100" value="50" class="volume-slider lyrics-volume-slider" aria-label="Volume">
+        </div>
       </div>
-      <div class="lyrics-transport" aria-label="Playback controls">
-      <button id="lyrics-btn-prev" class="lyrics-transport-btn" type="button" aria-label="Previous">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg>
-      </button>
-      <button id="lyrics-btn-play" class="lyrics-transport-btn lyrics-transport-btn--main" type="button" aria-label="Play/Pause">
-        <svg id="lyrics-icon-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-        <svg id="lyrics-icon-pause" viewBox="0 0 24 24" fill="currentColor" class="hidden"><path d="M6 19h4V5H6zm8-14v14h4V5z"/></svg>
-      </button>
-      <button id="lyrics-btn-next" class="lyrics-transport-btn" type="button" aria-label="Next">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm10-12v12h2V6z"/></svg>
-      </button>
-      </div>
-      <div class="lyrics-volume-wrap">
-        <svg class="vol-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 8.5v7a4.49 4.49 0 0 0 2.5-3.5zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg>
-        <input id="lyrics-volume-slider" type="range" min="0" max="100" value="50" class="volume-slider lyrics-volume-slider" aria-label="Volume">
+      <div class="lyrics-right">
+        <div id="lyrics-content" class="lyrics-content"></div>
       </div>
     </div>
   </div>
 
   <div id="pim-toast" class="pim-toast hidden"></div>
 
-  <script src="/static/app.js?v=63"></script>
-  <script src="/static/library.js?v=63"></script>
-  <script src="/static/lyrics.js?v=63"></script>
+  <script src="/static/app.js?v=68"></script>
+  <script src="/static/library.js?v=68"></script>
+  <script src="/static/lyrics.js?v=68"></script>
 </body>
 </html>

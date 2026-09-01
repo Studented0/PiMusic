@@ -9,3 +9,4 @@ server.prev.log
 server_*.log
 .claude/
 .vercel/
+logs/

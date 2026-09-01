@@ -1,5 +1,5 @@
 ## PiMusic
-A desk display for Spotify and Apple Music. Built with a Raspberry Pi 3B+ and a HyperPixel 4.0 touchscreen. Shows what's playing, Spotify Canvas videos as backgrounds, and lets you control playback with a rotary encoder.
+A desk display for Spotify and Apple Music. Built with a Raspberry Pi 5 and a Waveshare 5-inch DSI touchscreen (800x480 landscape). Shows what's playing, Spotify Canvas videos as backgrounds, and lets you control playback with a rotary encoder.
 
 ---
 
@@ -21,9 +21,9 @@ A desk display for Spotify and Apple Music. Built with a Raspberry Pi 3B+ and a 
 
 ## Hardware
 
-Hyperpixel 4.0 rectangular slots directly on the raspberry pi’s 40 pin GPIO interface, no extra wiring is needed. Resolution is 800x480 via DPI. Software compositor is is smoother than GL driver on the Pi 3B+
+Waveshare 5-inch DSI display, 800x480 landscape. Needs a `dtoverlay` entry in `/boot/firmware/config.txt` for the panel driver. Pi 5 has enough headroom to run Chromium in kiosk smoothly.
 
-Server is running on PC to optimize performance for the Pi. 3B+ struggles with Python, Playwright, and chromium even in kiosk at the same time. Flask server runs on my personal PC over the same network and the Pi just has Chromium in Kiosk mode pointed at the server, PC does all the heavy work and Pi just renders and looks pretty.
+Server still runs on PC — Playwright token capture, Canvas GraphQL fetching, and all the Python backend are too heavy to colocate with the kiosk. Flask server runs on my personal PC and the Pi just has Chromium in kiosk mode pointed at it over the network. Pi boots straight into the kiosk via `labwc/autostart` on boot.
 ## Rotary Encoder
 An EC11 encoder is wired to a SparkFun Pro Micro ATmega32U4, the Pro Micro shows up as a HID keyboard and the browser just reads the keypresses, no drivers needed. All three of the pins are on internal pull-ups which means that resistors are not needed. Single press play/pause, double skip, triple previous, four presses opens settings. The firmware just sends spacebars and the browser counts how many in a row.
 
@@ -48,6 +48,11 @@ cffi with Chrome131 impersonation gets past it. When on Apple Music, same system
 Flask server on PC handles Spotify polling, Canvas fetching, Apple Music by using Cider (3rd party Apple Music desktop app), Album art caching, and just gives everything to the Pi over the network.
 
 ---
+## Remote access (Tailscale)
+
+Tailscale on both the PC and Pi so I can hit the server from outside the apartment LAN. The Pi kiosk tries the local hostname first (`http://jeanine:5000`) and falls back to Tailscale MagicDNS if the LAN address is unreachable. One-time Pi setup script: `scripts/pi5_kiosk_setup.sh`.
+
+---
 ## Search, Playlists, and Liked Songs
 
 Tap the magnifier in the top bar to open the library overlay. Search Spotify with the on-screen keyboard (the Pi has no physical keyboard), browse your playlists and liked songs, tap a song to play it, or use the queue button on any row. Playing a track from a playlist/album keeps the rest of the collection queued. Spotify-only for now; requires a one-time re-auth after the playlist scopes were added:
@@ -58,17 +63,23 @@ python server\spotify_auth.py --reauth
 
 ## Lyrics
 
-Tap the lyrics icon to open synced lyrics for the current track (works for both Spotify and Apple Music). Lyrics come from LRCLIB with Spotify's internal lyrics endpoint as a fallback (same captured web-player tokens as Canvas). Synced lines auto-scroll and highlight using the same predictive clock as the progress bar — tap a line to seek there.
+Tap the lyrics icon to open synced lyrics for the current track (works for both Spotify and Apple Music). Album art, track info, transport controls, progress, and volume sit on the left; synced lyrics scroll on the right. Lyrics come from LRCLIB with Spotify's internal lyrics endpoint as a fallback (same captured web-player tokens as Canvas). Synced lines auto-scroll and highlight using the same predictive clock as the progress bar — tap a line to seek there.
+
+---
+## Cinematic mode
+
+Fullscreen Canvas video background on the 800x480 touchscreen. Touch-first controls sized for the kiosk. Chrome (title, progress, controls) stays visible while music is playing — only the idle screensaver dims it.
 
 ---
 ## Fixed headaches (previously known issues)
 
 1. ~~App is slow to update sometimes~~ — server now applies play/pause/seek/volume optimistically and force-polls after every command; `/api/state` extrapolates progress between polls.
-2. ~~Progress goes to 0 when you pause then corrects itself~~ — frontend no lon<img width="3264" height="2448" alt="IMG_0071" src="https://github.com/user-attachments/assets/9678a2a2-9c69-41d3-824a-f774bf6916a5" />
-ger wipes `progress_ms` during input locks, and drift correction between polls is actually wired up now.
+2. ~~Progress goes to 0 when you pause then corrects itself~~ — frontend no longer wipes `progress_ms` during input locks, and drift correction between polls is actually wired up now.
 3. ~~Volume is janky and not realtime~~ — volume reflects instantly server-side (Cider volume was hardcoded to 0; now polled for real), and the UI lock dropped from 5s to 1.8s.
 4. Album art 404s — art was cached to `server/art_cache/` but served from `art_cache/`; unified (existing files migrate automatically).
 5. Startup no longer chokes the PC's network — heavy tasks are staggered, and the hidden token-capture Chromium uses a persistent profile and blocks images/media/fonts/analytics.
+6. Lyrics/progress desync on pause — adaptive polling (2s playing / 5s idle) plus frontend sync while the lyrics overlay is open.
+7. Title/controls no longer auto-hide during playback — only the idle screensaver dims chrome.
 ---
 ## Project Structure
 
@@ -104,7 +115,8 @@ PiMusic/
 │   ├── debug-pimusic.bat    # Stop autostart task, run server in a visible console
 │   ├── view-log.bat         # Tail server.log
 │   ├── smoke_test.py        # Demo-mode test-client smoke tests (safe while server runs)
-│   └── build_demo_playlist.py # Build static/demo/playlist.json from Spotify URLs
+│   ├── build_demo_playlist.py # Build static/demo/playlist.json from Spotify URLs
+│   └── pi5_kiosk_setup.sh   # Pi 5 Chromium kiosk autostart (labwc + LXDE fallback)
 ├── firmware/
 │   └── pimusic_encoder/
 ├── CAD/                     # Mechanical CAD, renders, BOM

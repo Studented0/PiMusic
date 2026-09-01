@@ -84,7 +84,11 @@ _last_skip_cmd = 0.0
 _CMD_COOLDOWN = 1.0
 _SKIP_COOLDOWN = 0.5
 
-POLL_INTERVAL = 5  # Reduced from 1 to avoid rate limits (was 60 req/min, now 12)
+# Adaptive polling: fast while music plays (external pause/seek shows up in
+# <=2s instead of 5s, which was snapping the lyrics clock backwards), slow
+# when paused/idle. Playing = 30 req/min -- safely under Spotify's limits.
+POLL_INTERVAL_PLAYING = 2
+POLL_INTERVAL_IDLE = 5
 POLL_INTERVAL_NEAR_END = 1  # Fast poll inside the last NEAR_END_MS of a track
 NEAR_END_MS = 15_000
 _poll_counter = 0
@@ -605,7 +609,13 @@ def _poll_loop(sp):
             duration = _current_data.get("duration_ms", 0) or 0
             progress = _current_data.get("progress_ms", 0) or 0
         near_end = is_playing and duration > 0 and (duration - progress) < NEAR_END_MS
-        time.sleep(POLL_INTERVAL_NEAR_END if near_end else POLL_INTERVAL)
+        if near_end:
+            wait_s = POLL_INTERVAL_NEAR_END
+        elif is_playing:
+            wait_s = POLL_INTERVAL_PLAYING
+        else:
+            wait_s = POLL_INTERVAL_IDLE
+        time.sleep(wait_s)
 
 
 def start_polling(sp):

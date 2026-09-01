@@ -29,7 +29,14 @@
   var fetchToken  = 0;
   var SEARCH_DEBOUNCE_MS = 450;
   var PAGE = 50;
+  var AUTO_LOAD_DELAY_MS = 100;
+  var ENC_HOLD_MS = 550;
   var collectionCache = Object.create(null);  /* url?offset=N -> JSON */
+  var autoLoadChainId = 0;
+  var detailTrackMode = false;
+  var activeCollectionView = null;
+  var encHoldTimer = null;
+  var encHoldHandled = false;
 
   /* ── Net helpers ──────────────────────────────────────── */
 
@@ -116,6 +123,9 @@
 
   function trackRow(t, onPlay, withQueue) {
     var row = el("div", "lib-row");
+    if (t.uri) row.dataset.uri = t.uri;
+    if (t.name) row.dataset.name = t.name;
+    row._libPlay = onPlay;
     row.appendChild(thumb(t.art, true));
     var main = el("div", "lib-row-main");
     main.appendChild(el("div", "lib-row-title", t.name));
@@ -192,17 +202,75 @@
     return head;
   }
 
-  function loadMoreBtn(onClick) {
-    var b = el("button", "lib-loadmore", "Load more");
-    b.addEventListener("click", function () {
-      b.disabled = true;
-      b.textContent = "Loading\u2026";
-      onClick(b);
-    });
-    return b;
+  function ensureLoadingStatus() {
+    var st = content.querySelector(".lib-loading-status");
+    if (!st) {
+      st = el("div", "lib-loading-status");
+      content.appendChild(st);
+    }
+    return st;
+  }
+
+  function removeLoadingStatus() {
+    var st = content.querySelector(".lib-loading-status");
+    if (st) st.remove();
+  }
+
+  function autoLoadCollection(opts) {
+    var chainId = ++autoLoadChainId;
+    var baseUrl = opts.url.split("?")[0];
+    var offset = opts.offset;
+    var myToken = opts.myToken;
+    var totalLoaded = opts.initialCount || 0;
+    var total = opts.total;
+
+    function updateStatus() {
+      if (myToken !== fetchToken) return;
+      var st = ensureLoadingStatus();
+      if (total && total > 0) {
+        st.textContent = "Loading\u2026 " + totalLoaded + "/" + total;
+      } else {
+        st.textContent = "Loading\u2026 " + totalLoaded + " songs";
+      }
+    }
+
+    function loadNext() {
+      if (chainId !== autoLoadChainId || myToken !== fetchToken) return;
+      if (offset == null) {
+        removeLoadingStatus();
+        if (opts.onDone) opts.onDone(totalLoaded);
+        return;
+      }
+      getJson(baseUrl, offset).then(function (data) {
+        if (chainId !== autoLoadChainId || myToken !== fetchToken) return;
+        var items = data.items || [];
+        totalLoaded += items.length;
+        if (data.total != null) total = data.total;
+        if (items.length && opts.onPage) opts.onPage(items, data);
+        if (data.has_more && data.next_offset != null) {
+          offset = data.next_offset;
+          updateStatus();
+          setTimeout(loadNext, AUTO_LOAD_DELAY_MS);
+        } else {
+          removeLoadingStatus();
+          if (opts.onDone) opts.onDone(totalLoaded);
+        }
+      }).catch(function () {
+        if (chainId !== autoLoadChainId || myToken !== fetchToken) return;
+        removeLoadingStatus();
+        toast("Couldn't load more");
+        if (opts.onError) opts.onError();
+      });
+    }
+
+    updateStatus();
+    setTimeout(loadNext, AUTO_LOAD_DELAY_MS);
   }
 
   function setContent() {
+    detailTrackMode = false;
+    activeCollectionView = null;
+    autoLoadChainId++;
     clearEncoderFocus();
     content.innerHTML = "";
     for (var i = 0; i < arguments.length; i++) {
@@ -369,7 +437,18 @@
       content.innerHTML = "";
       content.appendChild(frag);
       if (data.has_more && data.next_offset != null) {
-        appendPlaylistPager(data.next_offset);
+        autoLoadCollection({
+          url: "/api/library/playlists",
+          offset: data.next_offset,
+          myToken: myToken,
+          initialCount: items.length,
+          total: data.total,
+          onPage: function (newItems) {
+            newItems.forEach(function (p) {
+              content.insertBefore(playlistRow(p), ensureLoadingStatus());
+            });
+          }
+        });
       }
       content.scrollTop = 0;
     }).catch(function (e) {
@@ -386,24 +465,6 @@
     );
   }
 
-  function appendPlaylistPager(offset) {
-    var myToken = fetchToken;   // bail if the view changed while loading
-    var btnMore = loadMoreBtn(function (b) {
-      getJson("/api/library/playlists", offset).then(function (data) {
-        if (myToken !== fetchToken) return;
-        b.remove();
-        (data.items || []).forEach(function (p) { content.appendChild(playlistRow(p)); });
-        if (data.has_more && data.next_offset != null) {
-          appendPlaylistPager(data.next_offset);
-        }
-      }).catch(function () {
-        b.disabled = false;
-        b.textContent = "Load more";
-      });
-    });
-    content.appendChild(btnMore);
-  }
-
   function openPlaylist(p) {
     var myToken = ++fetchToken;
     var contextUri = p.uri || ("spotify:playlist:" + p.id);
@@ -411,9 +472,6 @@
     setContent(spinner());
     getJson(moreUrl, 0).then(function (data) {
       if (myToken !== fetchToken) return;
-      if (data.has_more && data.next_offset != null) {
-        prefetchCollection(moreUrl, data.next_offset);
-      }
       renderTrackCollection({
         title: p.name,
         sub: (p.owner ? "by " + p.owner : ""),
@@ -421,10 +479,11 @@
         items: data.items || [],
         hasMore: data.has_more,
         nextOffset: data.next_offset,
+        total: data.total,
         moreUrl: moreUrl,
         isPlaylist: true,
         onBack: function () { setTab("playlists"); }
-      });
+      }, myToken);
     }).catch(function (e) {
       if (myToken !== fetchToken) return;
       setContent(message("Couldn't load playlist: " + e.message));
@@ -440,9 +499,6 @@
     setContent(spinner());
     getJson(moreUrl, 0).then(function (data) {
       if (myToken !== fetchToken) return;
-      if (data.has_more && data.next_offset != null) {
-        prefetchCollection(moreUrl, data.next_offset);
-      }
       renderTrackCollection({
         title: data.name || a.name,
         sub: data.artists || a.artists,
@@ -450,10 +506,11 @@
         items: data.items || [],
         hasMore: data.has_more,
         nextOffset: data.next_offset,
+        total: data.total,
         moreUrl: moreUrl,
         isPlaylist: false,
         onBack: function () { setTab("search", true); }
-      });
+      }, myToken);
     }).catch(function (e) {
       if (myToken !== fetchToken) return;
       setContent(message("Couldn't load album: " + e.message));
@@ -495,7 +552,15 @@
 
   /* Shared playlist/album track list view. Tapping a track plays it inside
      its context (so the queue continues with the rest of the collection). */
-  function renderTrackCollection(view) {
+  function appendCollectionTrackRow(view, t) {
+    return trackRow(t, function () {
+      playBody({ context_uri: view.contextUri, offset_uri: t.uri }, t.name);
+    }, true);
+  }
+
+  function renderTrackCollection(view, myToken) {
+    detailTrackMode = view.items.length > 0;
+    activeCollectionView = view;
     var frag = document.createDocumentFragment();
     var modes = collectionPlayModes(view);
     frag.appendChild(detailHeader(
@@ -511,42 +576,36 @@
       frag.appendChild(playRow);
     }
     if (!view.items.length) {
+      detailTrackMode = false;
       frag.appendChild(message("No playable songs in this playlist"));
     }
     view.items.forEach(function (t) {
-      frag.appendChild(trackRow(t, function () {
-        playBody({ context_uri: view.contextUri, offset_uri: t.uri }, t.name);
-      }, true));
+      frag.appendChild(appendCollectionTrackRow(view, t));
     });
     content.innerHTML = "";
     content.appendChild(frag);
     if (view.hasMore && view.nextOffset != null) {
-      appendCollectionPager(view, view.nextOffset);
+      autoLoadCollection({
+        url: view.moreUrl,
+        offset: view.nextOffset,
+        myToken: myToken,
+        initialCount: view.items.length,
+        total: view.total,
+        onPage: function (items) {
+          items.forEach(function (t) {
+            view.items.push(t);
+            content.insertBefore(
+              appendCollectionTrackRow(view, t),
+              ensureLoadingStatus()
+            );
+          });
+        },
+        onDone: function () { focusFirstTrackRowIfNone(); }
+      });
+    } else if (detailTrackMode) {
+      focusFirstTrackRow();
     }
     content.scrollTop = 0;
-  }
-
-  function appendCollectionPager(view, offset) {
-    var myToken = fetchToken;
-    var btnMore = loadMoreBtn(function (b) {
-      getJson(view.moreUrl, offset).then(function (data) {
-        if (myToken !== fetchToken) return;
-        b.remove();
-        (data.items || []).forEach(function (t) {
-          content.appendChild(trackRow(t, function () {
-            playBody({ context_uri: view.contextUri, offset_uri: t.uri }, t.name);
-          }, true));
-        });
-        if (data.has_more && data.next_offset != null) {
-          appendCollectionPager(view, data.next_offset);
-          prefetchCollection(view.moreUrl, data.next_offset);
-        }
-      }).catch(function () {
-        b.disabled = false;
-        b.textContent = "Load more";
-      });
-    });
-    content.appendChild(btnMore);
   }
 
   /* ── Queue tab ────────────────────────────────────────── */
@@ -602,12 +661,31 @@
         return;
       }
       var frag = document.createDocumentFragment();
+      detailTrackMode = likedItems.length > 0;
       likedItems.forEach(function (t, i) { frag.appendChild(likedRow(t, i)); });
       content.innerHTML = "";
       content.appendChild(frag);
       if (data.has_more && data.next_offset != null) {
-        appendLikedPager(data.next_offset);
-        prefetchCollection("/api/library/liked", data.next_offset);
+        autoLoadCollection({
+          url: "/api/library/liked",
+          offset: data.next_offset,
+          myToken: myToken,
+          initialCount: likedItems.length,
+          total: data.total,
+          onPage: function (items) {
+            var start = likedItems.length;
+            items.forEach(function (t, i) {
+              likedItems.push(t);
+              content.insertBefore(
+                likedRow(t, start + i),
+                ensureLoadingStatus()
+              );
+            });
+          },
+          onDone: function () { focusFirstTrackRowIfNone(); }
+        });
+      } else if (detailTrackMode) {
+        focusFirstTrackRow();
       }
       content.scrollTop = 0;
     }).catch(function (e) {
@@ -625,28 +703,6 @@
       }
       playBody({ uris: uris }, t.name);
     }, true);
-  }
-
-  function appendLikedPager(offset) {
-    var myToken = fetchToken;
-    var btnMore = loadMoreBtn(function (b) {
-      getJson("/api/library/liked", offset).then(function (data) {
-        if (myToken !== fetchToken) return;
-        b.remove();
-        var start = likedItems.length;
-        (data.items || []).forEach(function (t, i) {
-          likedItems.push(t);
-          content.appendChild(likedRow(t, start + i));
-        });
-        if (data.has_more && data.next_offset != null) {
-          appendLikedPager(data.next_offset);
-        }
-      }).catch(function () {
-        b.disabled = false;
-        b.textContent = "Load more";
-      });
-    });
-    content.appendChild(btnMore);
   }
 
   /* ── Tabs / open / close ──────────────────────────────── */
@@ -702,6 +758,11 @@
     overlay.classList.remove("library-overlay--over-lyrics");
     window.PiMusicOverlayOpen = false;
     clearTimeout(searchTimer);
+    clearTimeout(encHoldTimer);
+    encHoldHandled = false;
+    detailTrackMode = false;
+    activeCollectionView = null;
+    autoLoadChainId++;
     clearEncoderFocus();
   }
 
@@ -726,9 +787,9 @@
   overlay.addEventListener("click", function (e) { e.stopPropagation(); });
 
   /* ── Rotary encoder support ───────────────────────────────
-     While the library is open: rotation (ArrowUp/Down) moves a focus
-     ring through tabs/rows/buttons, 1 press activates the focused item,
-     2 presses go back (detail view) or close, 3+ presses close. */
+     Rotation moves focus. In track lists, only .lib-row tracks are focused.
+     Short press on a track row = play; hold ~0.5s = add to queue.
+     2 quick presses (non-track focus) = back; 3+ = close library. */
 
   var ENC_PRESS_BASE_MS   = 520;
   var ENC_PRESS_EXTEND_MS = 240;
@@ -745,13 +806,28 @@
   }
 
   function focusables() {
-    var sel = ".lib-tab, .lib-back-btn, .lib-playall-btn, .lib-playmode-btn, .lib-row, .lib-loadmore, #library-close";
+    var sel = ".lib-tab, .lib-back-btn, .lib-playall-btn, .lib-playmode-btn, .lib-row, #library-close";
     var nodes = overlay.querySelectorAll(sel);
     var out = [];
     for (var i = 0; i < nodes.length; i++) {
-      if (nodes[i].offsetParent !== null) out.push(nodes[i]);  // visible only
+      if (nodes[i].offsetParent !== null) out.push(nodes[i]);
     }
     return out;
+  }
+
+  function trackRows() {
+    var nodes = content.querySelectorAll(".lib-row");
+    var out = [];
+    for (var i = 0; i < nodes.length; i++) {
+      if (nodes[i].offsetParent !== null && nodes[i].dataset.uri) {
+        out.push(nodes[i]);
+      }
+    }
+    return out;
+  }
+
+  function isTrackFocusRow(el) {
+    return el && el.classList.contains("lib-row") && el.dataset.uri;
   }
 
   function clearEncoderFocus() {
@@ -761,8 +837,25 @@
     }
   }
 
+  function focusFirstTrackRow() {
+    var rows = trackRows();
+    if (!rows.length) return;
+    clearEncoderFocus();
+    encFocusEl = rows[0];
+    encFocusEl.classList.add("kbd-focus");
+    if (encFocusEl.scrollIntoView) {
+      encFocusEl.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  function focusFirstTrackRowIfNone() {
+    if (!encFocusEl || !content.contains(encFocusEl) || !isTrackFocusRow(encFocusEl)) {
+      focusFirstTrackRow();
+    }
+  }
+
   function moveEncoderFocus(dir) {
-    var list = focusables();
+    var list = detailTrackMode ? trackRows() : focusables();
     if (!list.length) return;
     var idx = encFocusEl ? list.indexOf(encFocusEl) : -1;
     idx = idx + dir;
@@ -805,8 +898,31 @@
     } else if (e.key === " ") {
       e.preventDefault();
       e.stopPropagation();
-      encoderPress();
+      encHoldHandled = false;
+      clearTimeout(encHoldTimer);
+      if (isTrackFocusRow(encFocusEl)) {
+        encHoldTimer = setTimeout(function () {
+          encHoldHandled = true;
+          queueTrack(encFocusEl.dataset.uri);
+        }, ENC_HOLD_MS);
+      }
     }
+  }, true);
+
+  window.addEventListener("keyup", function (e) {
+    if (!isOpen || e.key !== " ") return;
+    e.preventDefault();
+    e.stopPropagation();
+    clearTimeout(encHoldTimer);
+    if (encHoldHandled) {
+      encHoldHandled = false;
+      return;
+    }
+    if (isTrackFocusRow(encFocusEl)) {
+      if (encFocusEl._libPlay) encFocusEl._libPlay();
+      return;
+    }
+    encoderPress();
   }, true);
 
   window.PiMusicLibrary = {
